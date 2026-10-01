@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file workers.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Background workers (worker_threads).
 //
 // Every worker class lives in one entry file of the application, built as workers.js
@@ -5,6 +21,11 @@
 //
 //   class Mailer extends Worker {
 //       async onMessage( type: string, data: any ) { ... }      // its result answers a call
+//   }
+//   class Backup extends Worker {                              // runs until its stop
+//       async onRun( ) {
+//           while( await this.wait( 3_600_000 ) ) { ... }      // false as soon as the worker stops
+//       }
 //   }
 //   Worker.register( "mailer", Mailer );
 //   Worker.register( "render", Render, { multiple: true } );   // several instances allowed
@@ -21,6 +42,11 @@
 //   workers.on( "mailer", "sent", ( data, info ) => ... );     // posted by a worker
 //   workers.list( );
 //   await workers.stop( );
+//
+// Lifecycle of a worker: onStart, then the messages (one at a time, in order) and
+// onRun beside them. The stop fires this.signal at once (a wait in progress returns
+// false), waits for the end of onRun, then runs onStop. An error that ends onRun stops
+// the worker: like a crash, it is logged and not restarted.
 //
 // A worker receives the loaded configuration (frozen again on its side) and the
 // shared mutexes (mutex.ts). Its log lines go to the main thread, which writes them:
@@ -44,6 +70,10 @@ import type { MutexBuffers } from "./mutex";
 import { deepFreeze, isString } from "./tools";
 
 const DEFAULT_CALL_MS = 30_000;
+
+// fired when the worker stops. one per thread, and a thread runs one worker only: the
+// module is loaded again by each thread, so this is the state of the worker of the thread
+const stopper = isMainThread ? null : new AbortController( );
 
 // messages between the threads
 type ToWorker =
@@ -124,12 +154,45 @@ export abstract class Worker {
 		return undefined;
 	}
 
+	// the work of a worker that runs until its stop (scheduled tasks, polling...).
+	// started after onStart, beside the messages: workers.start does not wait for it
+	onRun( ): unknown {
+		return undefined;
+	}
+
 	// a post or a call from the main thread. for a call, the result is the answer
 	abstract onMessage( type: string, data: unknown ): unknown;
 
-	// called at the stop, before the thread ends
+	// called at the stop, after the end of onRun, before the thread ends
 	onStop( ): unknown {
 		return undefined;
+	}
+
+	// fired as soon as the stop is asked: to abort a fetch, a timer of node:timers/promises...
+	get signal( ): AbortSignal {
+		return stopper.signal;
+	}
+
+	// true after ms, false at once when the worker stops (or is stopping)
+	wait( ms: number ): Promise<boolean> {
+		const signal = stopper.signal;
+		if( signal.aborted ) {
+			return Promise.resolve( false );
+		}
+
+		return new Promise( resolve => {
+			const stop = ( ) => {
+				clearTimeout( timer );
+				resolve( false );
+			};
+
+			const timer = setTimeout( ( ) => {
+				signal.removeEventListener( "abort", stop );
+				resolve( true );
+			}, ms );
+
+			signal.addEventListener( "abort", stop, { once: true } );
+		} );
 	}
 }
 
@@ -158,16 +221,49 @@ export async function runWorker( ): Promise<void> {
 
 	// one message at a time, in order (like the WebSocket messages)
 	let chain = Promise.resolve( );
+	let run = Promise.resolve( );
 
 	parentPort.on( "message", ( message: ToWorker ) => {
-		chain = chain.then( ( ) => handle( worker, message ) );
+		// the stop is signaled at once, not after the messages in the queue
+		if( message.k === "stop" ) {
+			stopper.abort( );
+		}
+
+		chain = chain.then( ( ) => handle( worker, message, ( ) => run ) );
 	} );
 
 	await worker.onStart( );
 	send( { k: "ready" } );
+
+	// stopped during onStart: onStop may already have run
+	if( !stopper.signal.aborted ) {
+		run = runLoop( worker );
+	}
 }
 
-async function handle( worker: Worker, message: ToWorker ) {
+async function runLoop( worker: Worker ): Promise<void> {
+	try {
+		await worker.onRun( );
+	}
+	catch( e ) {
+		worker.log.error( "worker.run.failed", { worker: worker.name, error: e } );
+		if( stopper.signal.aborted ) {
+			return;
+		}
+
+		// a loop that died must be seen: the worker ends, like after a crash
+		stopper.abort( );
+		try {
+			await worker.onStop( );
+		}
+		finally {
+			process.exit( 1 );
+		}
+	}
+}
+
+// run: the onRun in progress, waited for by the stop
+async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<void> ) {
 	switch( message.k ) {
 		case "post":
 			try {
@@ -189,6 +285,7 @@ async function handle( worker: Worker, message: ToWorker ) {
 
 		case "stop":
 			try {
+				await run( );
 				await worker.onStop( );
 			}
 			finally {

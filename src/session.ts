@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file session.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Sessions: opaque tokens, no cookie.
 //
 // At login, the application (once the password is checked) opens a session and gives
@@ -32,7 +48,7 @@
 //
 //   export const sessions = new Sessions( sql, config.session, { rateLimit: config.rateLimit, securityLog } );
 //   RouteGroup.guarded( "/api/v1", sessions.guard );
-//   RouteGroup.unprotected( "/auth" ).add( "/", sessions.controller );   // POST /auth/login, /refresh, /logout, /stepup
+//   RouteGroup.unprotected( "/auth" ).add( "/", sessions.endPoints );   // POST /auth/login, /refresh, /logout, /stepup
 //
 // login: local password (password.ts). An application with another way to log in
 // (LDAP...) writes its own route and calls sessions.create once the user is checked.
@@ -40,8 +56,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 import { UsersModel, noAccessCheck, requestUser } from "./access";
-import { Controller } from "./controller";
-import type { Request, Response } from "./controller";
+import { EndPoints } from "./endpoints";
+import type { Request, Response } from "./endpoints";
 import { HttpError } from "./http-error";
 import { getParam } from "./params";
 import type { SecurityLog } from "./logger";
@@ -50,7 +66,7 @@ import { Model } from "./model";
 import { hashPassword, needsRehash, verifyPassword } from "./password";
 import { RateLimiter, refuse } from "./ratelimit";
 import { isSqlite } from "./sqlite";
-import { isArray, isString } from "./tools";
+import { dropOldest, isArray, isString } from "./tools";
 
 const CACHE_MS = 5000;
 const MAX_CACHED = 1000;
@@ -145,6 +161,10 @@ interface Entry {
 	expires: number;		// of the cache entry
 }
 
+function isToken( v: unknown ): v is string {
+	return isString( v ) && TOKEN_RE.test( v );
+}
+
 function hashToken( token: string ): string {
 	return createHash( "sha256" ).update( token ).digest( "hex" );
 }
@@ -177,7 +197,7 @@ export class Sessions {
 
 	// POST /login { login, password } and /refresh { refresh } -> tokens, POST /logout { refresh }.
 	// to mount in an unprotected group: the access token is expired when refreshing
-	readonly controller: Controller;
+	readonly endPoints: EndPoints;
 
 	// registers the models it reads (users, sessions) if the application did not
 	constructor( private readonly db: Db, private readonly settings: SessionSettings, private readonly options: SessionOptions ) {
@@ -196,7 +216,7 @@ export class Sessions {
 		this.verifiers = { password: this.verifyPassword, ...options.stepUpVerifiers };
 
 		// last: its routes use the limiters
-		this.controller = new SessionController( this );
+		this.endPoints = new SessionEP( this );
 	}
 
 	// ms before this login may be tried again after too many failures, 0 if it may
@@ -263,7 +283,7 @@ export class Sessions {
 	// a new pair for a valid refresh token. null: unknown or expired (answer 401).
 	// a replaced refresh token used again ends the whole session
 	readonly refresh = async ( refreshToken: string ): Promise<SessionTokens> => {
-		if( !isString( refreshToken ) || !TOKEN_RE.test( refreshToken ) ) {
+		if( !isToken( refreshToken ) ) {
 			return null;
 		}
 
@@ -294,7 +314,7 @@ export class Sessions {
 
 	// logout, with the refresh token: ends the session
 	readonly logout = async ( refreshToken: string ): Promise<void> => {
-		if( isString( refreshToken ) && TOKEN_RE.test( refreshToken ) ) {
+		if( isToken( refreshToken ) ) {
 			const [row] = await this.db`select id from sessions where refresh = ${hashToken( refreshToken )}`;
 			if( row ) {
 				await this.endSession( String( row.id ) );
@@ -317,7 +337,7 @@ export class Sessions {
 		const header = req.headers.authorization ?? "";
 		const token = header.startsWith( "Bearer " ) ? header.slice( 7 ) : "";
 
-		if( !TOKEN_RE.test( token ) ) {
+		if( !isToken( token ) ) {
 			return this.refuse( req.id, header ? "malformed" : "missing" );
 		}
 
@@ -379,7 +399,6 @@ export class Sessions {
 		this.options.securityLog?.log( "auth.stepup.failed", { user: user.id, method }, req.id );
 		return false;
 	};
-
 
 	// the built-in step-up proof: the password of the user, { password } in the body
 	private readonly verifyPassword: StepUpVerifier = async ( user, req ) => {
@@ -448,18 +467,14 @@ export class Sessions {
 			expires: now + CACHE_MS,
 		};
 
-		// Map keeps the insertion order: the first key is the oldest
-		if( this.cache.size >= MAX_CACHED ) {
-			this.cache.delete( this.cache.keys( ).next( ).value );
-		}
-
+		dropOldest( this.cache, MAX_CACHED );
 		this.cache.set( accessHash, entry );
 		return entry;
 	}
 }
 
 // the routes of the sessions: /login, /refresh, /logout and /stepup
-class SessionController extends Controller {
+class SessionEP extends EndPoints {
 	constructor( private readonly sessions: Sessions ) {
 		super( );
 		this.post( "/login", this.on_login, { filter: sessions.loginLimiter.filter } );
@@ -474,10 +489,7 @@ class SessionController extends Controller {
 		res.locals.expectedSlow = true;
 
 		const login = this.bodyValue( req, "login" );
-		const wait = this.sessions.loginBlockedFor( login );
-		if( wait ) {
-			return refuse( req, res, "login-failures", wait );
-		}
+		this.checkBlocked( req, res, login );
 
 		const tokens = await this.sessions.login( login, this.bodyValue( req, "password" ), req.id );
 		if( !tokens ) {
@@ -492,11 +504,7 @@ class SessionController extends Controller {
 		noAccessCheck( req.user );
 		res.locals.expectedSlow = true;
 
-		const login = ( req.user as SessionUser ).login;
-		const wait = this.sessions.loginBlockedFor( login );
-		if( wait ) {
-			return refuse( req, res, "login-failures", wait );
-		}
+		this.checkBlocked( req, res, ( req.user as SessionUser ).login );
 
 		const method = this.bodyValue( req, "method", "string", { required: false, default: "password" } );
 		if( !await this.sessions.stepUpWith( req, method ) ) {
@@ -518,5 +526,13 @@ class SessionController extends Controller {
 	async on_logout( req: Request, res: Response ) {
 		await this.sessions.logout( this.bodyValue( req, "refresh" ) );
 		res.json( {} );
+	}
+
+	// too many failures for this login: 429 with Retry-After
+	private checkBlocked( req: Request, res: Response, login: string ) {
+		const wait = this.sessions.loginBlockedFor( login );
+		if( wait ) {
+			refuse( req, res, "login-failures", wait );
+		}
 	}
 }

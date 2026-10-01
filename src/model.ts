@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file model.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Base class of all models: a model owns one table (or a few) and knows how to
 // create it, migrate it and validate it.
 //
@@ -6,11 +22,11 @@
 // dry run (played on the real database, then rolled back), so the pre-flight
 // verdict cannot diverge from the real boot.
 //
-// Works with postgres.js and with y4js/sqlite: the models only see the common
+// Works with postgres.js and with z4js/sqlite: the models only see the common
 // surface (Db). The SQL written by the models is theirs; only the tools below
 // depend on the database.
 //
-// Versions: y4js keeps the version of each model in the table y4_versions. onMigrate
+// Versions: z4js keeps the version of each model in the table __versions. onMigrate
 // receives the stored one (0 the first time) and returns the new one. It is called
 // at every start: the version says what was done by the code, but the base may have
 // been changed by hand (dev): checking the real state (hasTable...) stays the rule.
@@ -27,7 +43,6 @@ const SQLITE_DEFAULT_SCHEMA = "main";
 
 const DEFAULT_PRIORITY = 100;
 const DRY_RUN_LOCK_TIMEOUT = "10s";
-
 
 // SQLSTATE prefixes and postgres.js / Node codes that say something about the
 // access to the database, not about the migration: a dry run gives "no verdict"
@@ -54,7 +69,7 @@ export function isInfraError( e: unknown ): boolean {
 }
 
 // what the models need from a connection: postgres.js (Sql, TransactionSql)
-// and y4js/sqlite (SqliteSql, SqliteTx) both fit it
+// and z4js/sqlite (SqliteSql, SqliteTx) both fit it
 export interface Db {
 	<T extends readonly object[] = Record<string, any>[]>( strings: TemplateStringsArray, ...values: any[] ): PromiseLike<T>;
 }
@@ -185,19 +200,24 @@ function dialectOf( db: Db ): Dialect {
 	return isSqlite( db ) ? SQLITE : POSTGRES;
 }
 
-// version of each model. y4_versions is written in the SQL text (a table name cannot
+// version of each model. __versions is written in the SQL text (a table name cannot
 // be a parameter). No schema prefix: it goes in the default one of the connection
 // (search_path in Postgres, main in SQLite). Created if missing, inside the migration
 // transaction (a dry run leaves nothing)
 async function readVersions( db: Db ): Promise<Map<string, number>> {
-	await db`create table if not exists y4_versions ( model text primary key, version integer not null )`;
-	const rows = await db`select model, version from y4_versions`;
+	await db`create table if not exists __versions ( model text primary key, version integer not null )`;
+	const rows = await db`select model, version from __versions`;
 	return new Map( rows.map( r => [r.model as string, Number( r.version )] ) );
 }
 
-function splitName( name: string, defaultSchema: string ): [string, string] {
-	const idx = name.indexOf( "." );
-	return idx === -1 ? [defaultSchema, name] : [name.slice( 0, idx ), name.slice( idx + 1 )];
+// the dialect of the connection, and the schema and name of "[schema.]table"
+function locate( db: Db, table: string ) {
+	const dialect = dialectOf( db );
+	const idx = table.indexOf( "." );
+
+	return idx === -1
+		? { dialect, schema: dialect.defaultSchema, name: table }
+		: { dialect, schema: table.slice( 0, idx ), name: table.slice( idx + 1 ) };
 }
 
 // -- model --------------------------------------------------------------------
@@ -214,7 +234,7 @@ export class Model {
 
 	// models register themselves in a static registry when they are
 	// created, because they are instantiated and exported at import time (same
-	// style as the controllers). Model names are unique: a second one throws.
+	// style as the end points). Model names are unique: a second one throws.
 	private static readonly registry = new Map<string, Model>( );
 	private static updated = false;
 
@@ -234,7 +254,7 @@ export class Model {
 	}
 
 	// the registered model of that name, created by create( ) if there is none yet.
-	// used by the y4js parts that need a model (Access, Sessions): the application may
+	// used by the z4js parts that need a model (Access, Sessions): the application may
 	// still create it itself before, with its own priority
 	static ensure( modelName: string, create: ( ) => Model ): Model {
 		return Model.registry.get( modelName ) ?? create( );
@@ -312,7 +332,7 @@ export class Model {
 					}
 
 					if( next !== current ) {
-						await db`insert into y4_versions ( model, version ) values ( ${model.modelName}, ${next} )
+						await db`insert into __versions ( model, version ) values ( ${model.modelName}, ${next} )
 							on conflict ( model ) do update set version = excluded.version`;
 					}
 				}
@@ -367,26 +387,22 @@ export class Model {
 	// migration transaction, so they see what the previous models just created
 
 	protected async hasTable( db: Db, table: string ): Promise<boolean> {
-		const dialect = dialectOf( db );
-		const [schema, name] = splitName( table, dialect.defaultSchema );
+		const { dialect, schema, name } = locate( db, table );
 		return dialect.tableExists( db, schema, name );
 	}
 
 	protected async hasField( db: Db, table: string, field: string ): Promise<boolean> {
-		const dialect = dialectOf( db );
-		const [schema, name] = splitName( table, dialect.defaultSchema );
+		const { dialect, schema, name } = locate( db, table );
 		return dialect.fieldExists( db, schema, name, field );
 	}
 
 	protected async fieldType( db: Db, table: string, field: string ): Promise<string> {
-		const dialect = dialectOf( db );
-		const [schema, name] = splitName( table, dialect.defaultSchema );
+		const { dialect, schema, name } = locate( db, table );
 		return dialect.fieldType( db, schema, name, field );
 	}
 
 	protected async hasIndex( db: Db, table: string, index: string ): Promise<boolean> {
-		const dialect = dialectOf( db );
-		const [schema, name] = splitName( table, dialect.defaultSchema );
+		const { dialect, schema, name } = locate( db, table );
 		return dialect.indexExists( db, schema, name, index );
 	}
 }

@@ -1,17 +1,25 @@
 {
-	"name": "y4js",
-	"version": "0.0.0",
+	"name": "z4js",
+	"version": "1.0.0",
 	"description": "Backend framework: TypeScript sources, Postgres or SQLite, secure by design.",
 	"license": "MIT",
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./schema": "./src/shared/schema.ts"
+		"./shape": "./src/shared/shape.ts"
+	},
+	"bin": {
+		"z4js": "./bin/z4js.js"
 	},
 	"files": [
-		"src"
+		"src",
+		"bin",
+		"aiguide.md",
+		"aicontext.md"
 	],
 	"scripts": {
+		"build": "x4build build",
+		"prepack": "npm run build",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit"
 	},
 	"dependencies": {
@@ -25,5 +33,13 @@
 		"@types/node": "^22.0.0",
 		"@types/ws": "^8.18.2",
 		"typescript": "^5.6.0"
+	},
+	"peerDependencies": {
+		"typescript": ">=5.0"
+	},
+	"peerDependenciesMeta": {
+		"typescript": {
+			"optional": true
+		}
 	}
 }

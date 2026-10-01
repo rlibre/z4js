@@ -1,11 +1,11 @@
 // Entry point of the demo: configuration, database, sessions, routes, workers, server.
 
 import { join } from "node:path";
-import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "y4js";
+import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "z4js";
 import { DemoConfig } from "./config";
-import { LiveController } from "./live";
+import { LiveChannel } from "./live";
 import { seed } from "./models";
-import { MeController, NotesController } from "./notes";
+import { MeEP, NotesEP } from "./notes";
 
 let config: DemoConfig;
 try {
@@ -35,17 +35,18 @@ await seed( sql );
 // the worker entry file is dist/workers.js, next to this one
 const workers = new Workers( { config, logger } );
 await workers.start( "stats" );
+await workers.start( "backup" );
 
-const live = new LiveController( );
+const live = new LiveChannel( );
 
 // every route of /api needs a session; /auth is open (login, refresh, logout, stepup)
 const api = RouteGroup.guarded( "/api", sessions.guard )
-	.add( "/notes", new NotesController( { sql, access, sessions, live, workers } ) )
-	.add( "/me", new MeController( ) )
+	.add( "/notes", new NotesEP( { sql, access, sessions, live, workers } ) )
+	.add( "/me", new MeEP( ) )
 	.add( "/live", live );
 
 const auth = RouteGroup.unprotected( "/auth" )
-	.add( "/", sessions.controller );
+	.add( "/", sessions.endPoints );
 
 await serve( {
 	config,

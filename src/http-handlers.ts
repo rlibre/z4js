@@ -1,14 +1,30 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file http-handlers.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Uniform "not found" and central error handler.
 //
 // The client receives only a status and a short message: the message of an
-// HttpError or of a SchemaError (which names the field, never the value), a fixed
+// HttpError or of a ShapeError (which names the field, never the value), a fixed
 // text otherwise. Details and stack go to the log, never to the response.
 
 import type { ErrorRequestHandler, RequestHandler } from "express";
-import { HttpError } from "./http-error";
+import { HttpError, statusText } from "./http-error";
 import type { Logger } from "./logger";
 import { LockError } from "./mutex";
-import { SchemaError } from "./shared/schema";
+import { ShapeError } from "./shared/shape";
 import { errorCode, isIntNumber } from "./tools";
 
 export const notFoundHandler: RequestHandler = ( _req, res ) => {
@@ -32,6 +48,7 @@ export function createErrorHandler( logger: Logger ): ErrorRequestHandler {
 
 		let status = 500;
 		let message = "Internal Server Error";
+		const fromExpress = clientStatus( err );
 
 		if( err instanceof HttpError ) {
 			status = err.code;
@@ -40,15 +57,15 @@ export function createErrorHandler( logger: Logger ): ErrorRequestHandler {
 		else if( err instanceof LockError ) {
 			// a resource held too long, or the shutdown: try again later
 			status = 503;
-			message = new HttpError( 503 ).message;
+			message = statusText( 503 );
 		}
-		else if( err instanceof SchemaError ) {
+		else if( err instanceof ShapeError ) {
 			status = 400;
 			message = err.message;
 		}
-		else if( clientStatus( err ) ) {
-			status = clientStatus( err );
-			message = new HttpError( status ).message;
+		else if( fromExpress ) {
+			status = fromExpress;
+			message = statusText( status );
 		}
 		else if( errorCode( err ) === "22001" ) {
 			// value too long for the column: the client's fault, not a server error
@@ -56,7 +73,7 @@ export function createErrorHandler( logger: Logger ): ErrorRequestHandler {
 			message = "value too long";
 		}
 
-		if( !Number.isInteger( status ) || status < 400 || status > 599 ) {
+		if( !isIntNumber( status ) || status < 400 || status > 599 ) {
 			status = 500;
 			message = "Internal Server Error";
 		}

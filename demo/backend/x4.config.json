@@ -16,7 +16,7 @@
 	"esbuild": {
 		"target": "node24",
 		"banner": {
-			"js": "import { createRequire as __y4Require } from 'node:module'; const require = __y4Require( import.meta.url );"
+			"js": "import { createRequire as __z4Require } from 'node:module'; const require = __z4Require( import.meta.url );"
 		}
 	}
 }

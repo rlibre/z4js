@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file password.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Password hashing: PBKDF2-SHA256, built in node:crypto (no dependency), slow on
 // purpose (about 100 ms) and without memory cost.
 //
@@ -29,12 +45,17 @@ function prepare( password: string ): string {
 	return password.normalize( "NFC" );
 }
 
+// a non empty string, short enough to be worth hashing
+function acceptable( password: unknown ): password is string {
+	return isString( password ) && !!password && password.length <= MAX_LENGTH;
+}
+
 function derive( password: string, salt: Buffer, iterations: number ): Promise<Buffer> {
 	return pbkdf2Async( prepare( password ), salt, iterations, HASH_BYTES, "sha256" );
 }
 
 export async function hashPassword( password: string ): Promise<string> {
-	if( !isString( password ) || !password || password.length > MAX_LENGTH ) {
+	if( !acceptable( password ) ) {
 		throw new TypeError( "password: invalid value" );
 	}
 
@@ -47,7 +68,7 @@ export async function hashPassword( password: string ): Promise<string> {
 // the comparison takes the same time whatever the number of matching bytes
 export async function verifyPassword( password: string, stored: string ): Promise<boolean> {
 	const m = isString( stored ) ? STORED_RE.exec( stored ) : null;
-	if( !m || !isString( password ) || !password || password.length > MAX_LENGTH ) {
+	if( !m || !acceptable( password ) ) {
 		return false;
 	}
 

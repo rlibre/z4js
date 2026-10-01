@@ -1,0 +1,13 @@
+{
+	"entryPoints": [
+		"cli/z4js.ts"
+	],
+	"outdir": "bin",
+	"external": [
+		"typescript"
+	],
+	"esbuild": {
+		"target": "node22",
+		"minify": false
+	}
+}

@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file config.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Configuration: one JSON file given by --config=<file> (or --config <file>).
 //
 // The class is the schema: each readonly field is read by a helper (string, int,
@@ -36,7 +52,7 @@
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { LOG_LEVELS } from "./logger";
-import { deepFreeze, isIntNumber, isNumber, isPlainObject, isString } from "./tools";
+import { argValue, deepFreeze, isIntNumber, isNumber, isPlainObject, isString } from "./tools";
 
 // every problem found while loading the configuration, listed at once
 export class ConfigError extends Error {
@@ -76,7 +92,7 @@ interface Loading {
 // (synchronous) construction only, and always clears it
 let loading: Loading = null;
 
-// the configuration of a y4js application: its readonly fields are the schema of
+// the configuration of a z4js application: its readonly fields are the schema of
 // the file. the application extends it with its own sections (see the header)
 export class Config {
 	readonly mode = this.oneOf( "mode", ["production", "debug"] as const, { def: "production" } );
@@ -141,7 +157,7 @@ export class Config {
 	};
 
 	// reads, checks and freezes the configuration. throws a ConfigError listing every problem
-	static load<T extends Config>( cls: new ( ) => T, file = Config.argvFile( ) ): T {
+	static load<T extends Config>( cls: new ( ) => T, file = argValue( "config" ) ): T {
 		if( loading ) {
 			throw new Error( "config: a load is already in progress" );
 		}
@@ -354,21 +370,6 @@ export class Config {
 		return content ? content : invalid( key, `${path} is empty`, opts );
 	}
 
-	private static argvFile( ): string {
-		const args = process.argv;
-
-		for( let i = 0; i < args.length; i++ ) {
-			if( args[i].startsWith( "--config=" ) ) {
-				return args[i].slice( "--config=".length );
-			}
-
-			if( args[i] === "--config" ) {
-				return args[i + 1] ?? null;
-			}
-		}
-
-		return null;
-	}
 }
 
 // -- internals ------------------------------------------------------------------

@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file access.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Users, groups and access rights.
 //
 // A user belongs to groups (users.grps: list of group ids), a group carries rights
@@ -22,7 +38,7 @@ import type { Db } from "./model";
 import { Model } from "./model";
 import type { SecurityLog } from "./logger";
 import { isSqlite } from "./sqlite";
-import { isArray, isString, isUUID } from "./tools";
+import { dropOldest, isArray, isString, isUUID } from "./tools";
 
 const CACHE_MS = 5000;
 
@@ -30,7 +46,7 @@ const CACHE_MS = 5000;
 const MAX_CACHED_USERS = 1000;
 
 // -- models ---------------------------------------------------------------------
-// the strict minimum used by y4js. they are registered by Access and Sessions when
+// the strict minimum used by z4js. they are registered by Access and Sessions when
 // they are created, before Model.updateAll. an application that needs more columns
 // adds them with a model of its own, migrated after these ones
 
@@ -97,7 +113,7 @@ function stringList( v: unknown ): string[] {
 }
 
 // marks left on the user object of a request
-const CHECKED = Symbol( "y4js.access.checked" );
+const CHECKED = Symbol( "z4js.access.checked" );
 
 // the user object of one request: a copy of the user (own properties, so that
 // res.json( req.user ) shows them), carrying the access check mark of this request
@@ -130,6 +146,10 @@ export interface AccessOptions {
 
 type UserRef = string | { id: string };
 
+function idOf( user: UserRef ): string {
+	return isString( user ) ? user : user?.id;
+}
+
 // access control: tells whether a user has a right, from the rights of his groups.
 // one instance per application, its functions are taken out (see the header)
 export class Access {
@@ -148,7 +168,7 @@ export class Access {
 	readonly userHasAccess = async ( user: UserRef, right: string ): Promise<boolean> => {
 		markChecked( user );
 
-		const id = isString( user ) ? user : user?.id;
+		const id = idOf( user );
 		const granted = isUUID( id ) && rightMatches( await this.rightsOf( id ), right );
 
 		if( !granted ) {
@@ -165,7 +185,7 @@ export class Access {
 	// rights is granted to the actor himself (nobody gives what he does not have).
 	// an unknown group is refused. returns the refused ids, to be logged by the caller
 	readonly ungrantableGroups = async ( actor: UserRef, groupIds: readonly string[] ): Promise<string[]> => {
-		const id = isString( actor ) ? actor : actor?.id;
+		const id = idOf( actor );
 		const mine = isUUID( id ) ? await this.rightsOf( id ) : new Set<string>( );
 		const groups = await this.groupRights( );
 
@@ -190,12 +210,9 @@ export class Access {
 			groups.get( gid )?.forEach( r => rights.add( r ) );
 		}
 
-		// Map keeps the insertion order: the first key is the oldest
+		// set again at the end: the newest entry
 		this.users.delete( id );
-		if( this.users.size >= MAX_CACHED_USERS ) {
-			this.users.delete( this.users.keys( ).next( ).value );
-		}
-
+		dropOldest( this.users, MAX_CACHED_USERS );
 		this.users.set( id, { rights, expires: now + CACHE_MS } );
 		return rights;
 	}

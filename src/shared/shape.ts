@@ -1,10 +1,26 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file shape.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // No Node or browser dependency in this file: usable on the server and on the client.
 
-import { isPlainObject, parseSqlDate } from "./tools";
+import { isPlainObject, parseSqlDate, UUID_RE } from "./tools";
 import type { SqlDatePart } from "./tools";
 
 // a value refused by a validator: the message names the field, never the value
-export class SchemaError extends Error {}
+export class ShapeError extends Error {}
 
 // base class of the validators: optional and nullable, then the check of the value
 abstract class BaseValidator {
@@ -17,7 +33,7 @@ abstract class BaseValidator {
 	isOptional( ) { return this._optional; }
 	isNullable( ) { return this._nullable; }
 
-	// throws SchemaError on failure, never includes the received value in the message
+	// throws ShapeError on failure, never includes the received value in the message
 	abstract validate( name: string, value: unknown ): unknown;
 }
 
@@ -59,7 +75,7 @@ class StringValidator extends BaseValidator {
 	}
 
 	uuid( ): this {
-		return this.format( /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "uuid" );
+		return this.format( UUID_RE, "uuid" );
 	}
 
 	// a second call replaces the first one: a string has a single format
@@ -71,26 +87,26 @@ class StringValidator extends BaseValidator {
 
 	validate( name: string, value: unknown ): string {
 		if( typeof value !== "string" ) {
-			throw new SchemaError( `"${name}": string expected` );
+			throw new ShapeError( `"${name}": string expected` );
 		}
 
 		let str = this._trim ? value.trim( ) : value;
 
 		// the format is tested on the original value, before any truncation
 		if( this._regex && !this._regex.test( str ) ) {
-			throw new SchemaError( `"${name}": bad ${this._formatName}` );
+			throw new ShapeError( `"${name}": bad ${this._formatName}` );
 		}
 
 		// count code points (like Postgres counts characters), not UTF-16 units
 		const chars = [...str];
 
 		if( this._minLen !== undefined && chars.length < this._minLen ) {
-			throw new SchemaError( `"${name}": too short (min ${this._minLen})` );
+			throw new ShapeError( `"${name}": too short (min ${this._minLen})` );
 		}
 
 		if( this._maxLen !== undefined && chars.length > this._maxLen ) {
 			if( !this._truncate ) {
-				throw new SchemaError( `"${name}": too long (max ${this._maxLen})` );
+				throw new ShapeError( `"${name}": too long (max ${this._maxLen})` );
 			}
 
 			str = chars.slice( 0, this._maxLen ).join( "" );
@@ -128,23 +144,23 @@ class NumberValidator extends BaseValidator {
 	validate( name: string, value: unknown ): number {
 		// Number.isFinite rejects NaN and +/-Infinity
 		if( typeof value !== "number" || !Number.isFinite( value ) ) {
-			throw new SchemaError( `"${name}": number expected` );
+			throw new ShapeError( `"${name}": number expected` );
 		}
 
 		if( this._integer && !Number.isInteger( value ) ) {
-			throw new SchemaError( `"${name}": integer expected` );
+			throw new ShapeError( `"${name}": integer expected` );
 		}
 
 		if( this._min !== undefined && value < this._min ) {
-			throw new SchemaError( `"${name}": too low (min ${this._min})` );
+			throw new ShapeError( `"${name}": too low (min ${this._min})` );
 		}
 
 		if( this._max !== undefined && value > this._max ) {
-			throw new SchemaError( `"${name}": too high (max ${this._max})` );
+			throw new ShapeError( `"${name}": too high (max ${this._max})` );
 		}
 
 		if( this._notZero && value === 0 ) {
-			throw new SchemaError( `"${name}": cannot be zero` );
+			throw new ShapeError( `"${name}": cannot be zero` );
 		}
 
 		return value;
@@ -157,7 +173,7 @@ class NumberValidator extends BaseValidator {
 class BoolValidator extends BaseValidator {
 	validate( name: string, value: unknown ): boolean {
 		if( typeof value !== "boolean" ) {
-			throw new SchemaError( `"${name}": boolean expected` );
+			throw new ShapeError( `"${name}": boolean expected` );
 		}
 
 		return value;
@@ -178,7 +194,7 @@ class EnumValidator extends BaseValidator {
 	validate( name: string, value: unknown ): string {
 		// the received value is never echoed back
 		if( typeof value !== "string" || !this._values.includes( value ) ) {
-			throw new SchemaError( `"${name}": unknown value` );
+			throw new ShapeError( `"${name}": unknown value` );
 		}
 
 		return value;
@@ -199,12 +215,12 @@ class DateValidator extends BaseValidator {
 
 	validate( name: string, value: unknown ): Date {
 		if( typeof value !== "string" ) {
-			throw new SchemaError( `"${name}": date expected` );
+			throw new ShapeError( `"${name}": date expected` );
 		}
 
 		const date = parseSqlDate( value, DATE_PARTS[this._format], true );
 		if( !date ) {
-			throw new SchemaError( `"${name}": bad date format` );
+			throw new ShapeError( `"${name}": bad date format` );
 		}
 
 		return date;
@@ -227,7 +243,7 @@ export class ObjectValidator<T = any> extends BaseValidator {
 	parse( data: unknown, partial: true ): Partial<T>;
 	parse( data: unknown, partial = false ): any {
 		if( !isPlainObject( data ) ) {
-			throw new SchemaError( "object expected" );
+			throw new ShapeError( "object expected" );
 		}
 
 		const result: Record<string, unknown> = {};
@@ -237,11 +253,11 @@ export class ObjectValidator<T = any> extends BaseValidator {
 
 			// own properties only, so "constructor" or "toString" never count as present
 			const present = Object.hasOwn( data, key );
-			const value = present ? ( data as Record<string, unknown> )[key] : undefined;
+			const value = present ? data[key] : undefined;
 
 			if( value === undefined ) {
 				if( !partial && !validator.isOptional( ) ) {
-					throw new SchemaError( `"${key}": required` );
+					throw new ShapeError( `"${key}": required` );
 				}
 				continue;
 			}
@@ -249,7 +265,7 @@ export class ObjectValidator<T = any> extends BaseValidator {
 			// null is kept as null (PATCH: "absent" means untouched, "null" means clear)
 			if( value === null ) {
 				if( !validator.isNullable( ) ) {
-					throw new SchemaError( `"${key}": cannot be null` );
+					throw new ShapeError( `"${key}": cannot be null` );
 				}
 				result[key] = null;
 				continue;
@@ -263,7 +279,7 @@ export class ObjectValidator<T = any> extends BaseValidator {
 
 	parseArray( data: unknown ): T[] {
 		if( !Array.isArray( data ) ) {
-			throw new SchemaError( "array expected" );
+			throw new ShapeError( "array expected" );
 		}
 
 		return data.map( line => this.parse( line ) );
@@ -276,8 +292,8 @@ export class ObjectValidator<T = any> extends BaseValidator {
 
 // ---------------------------------------------------------------------------
 
-// the entry point of the validators: Schema.string( ), Schema.object( { ... } )...
-export class Schema {
+// the entry point of the validators: Shape.string( ), Shape.object( { ... } )...
+export class Shape {
 	static string( ) { return new StringValidator( ); }
 	static email( ) { return new StringValidator( ).email( ); }
 	static uuid( ) { return new StringValidator( ).uuid( ); }

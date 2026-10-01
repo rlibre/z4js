@@ -1,10 +1,26 @@
-// Route paths: checks and helpers shared by the HTTP and WebSocket controllers.
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file paths.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
+// Route paths: checks and helpers shared by the HTTP end points and the WebSocket channels.
 
 // a path is made of segments separated by "/": a literal, or ":name" for a parameter.
 // No wildcard, no optional part, no regular expression, no "." or ".." segment
 // (a browser normalizes them away: such a route could never be reached)
 const SEGMENT_RE = /^(?:[A-Za-z0-9_.~-]+|:[A-Za-z_][A-Za-z0-9_]*)$/;
-const PARAM_RE = /:[A-Za-z_][A-Za-z0-9_]*/g;
+export const PARAM_RE = /:[A-Za-z_][A-Za-z0-9_]*/g;
 
 export function checkPath( path: string ): void {
 	if( path === "/" ) {
@@ -19,7 +35,7 @@ export function checkPath( path: string ): void {
 }
 
 // a path without parameter: group prefixes and sub-paths (the router of a group could
-// not pass the value to the controllers), WebSocket endpoints
+// not pass the value to the end points), WebSocket endpoints
 export function checkFixedPath( path: string ): void {
 	checkPath( path );
 
@@ -40,4 +56,24 @@ export function joinPath( prefix: string, path: string ): string {
 	}
 
 	return prefix === "/" ? path : prefix + path;
+}
+
+// the routes noted by an EndPoints or a Channel: frozen, two routes with the same
+// key (routeKey) are refused
+export class RouteList<R extends object> {
+	private readonly list: R[] = [];
+	private readonly keys = new Set<string>( );
+
+	get all( ): readonly R[] {
+		return this.list;
+	}
+
+	add( key: string, route: R ) {
+		if( this.keys.has( key ) ) {
+			throw new Error( `duplicate route ${key}` );
+		}
+
+		this.keys.add( key );
+		this.list.push( Object.freeze( route ) );
+	}
 }

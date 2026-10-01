@@ -8,20 +8,20 @@
 //   GET    /api/me                 any user
 
 import { randomUUID } from "node:crypto";
-import { Controller, HttpError, noAccessCheck } from "y4js";
-import type { Access, Request, Response, Sessions, SqliteSql, Workers } from "y4js";
-import type { LiveController } from "./live";
+import { EndPoints, HttpError, noAccessCheck } from "z4js";
+import type { Access, Request, Response, Sessions, SqliteSql, Workers } from "z4js";
+import type { LiveChannel } from "./live";
 
 interface Deps {
 	sql: SqliteSql;
 	access: Access;
 	sessions: Sessions;
-	live: LiveController;
+	live: LiveChannel;
 	workers: Workers;
 }
 
 // the routes of the notes (see the header)
-export class NotesController extends Controller {
+export class NotesEP extends EndPoints {
 	constructor( private readonly deps: Deps ) {
 		super( );
 
@@ -90,7 +90,7 @@ export class NotesController extends Controller {
 }
 
 // the logged user
-export class MeController extends Controller {
+export class MeEP extends EndPoints {
 	constructor( ) {
 		super( );
 		this.get( "/", this.on_me );

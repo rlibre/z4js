@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file ratelimit.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Rate limiting, in memory: a counter per key (an IP, a login...) over a fixed window.
 //
 // Used as a route filter, keyed on the IP:
@@ -9,8 +25,9 @@
 // configuration, otherwise a client could make up its address to escape the limit.
 // Above the limit: 429 with a Retry-After header (seconds).
 
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { HttpError } from "./http-error";
+import { dropOldest } from "./tools";
 
 // keys followed by one limiter: above, the oldest are forgotten (bounds the memory)
 const MAX_KEYS = 10_000;
@@ -82,14 +99,12 @@ export class RateLimiter {
 			}
 		}
 
-		while( this.hits.size >= MAX_KEYS ) {
-			this.hits.delete( this.hits.keys( ).next( ).value );
-		}
+		dropOldest( this.hits, MAX_KEYS );
 	}
 }
 
 // 429 with Retry-After: thrown, so the central error handler answers
-export function refuse( req: Parameters<RequestHandler>[0], res: Parameters<RequestHandler>[1], name: string, waitMs: number ): never {
+export function refuse( req: Request, res: Response, name: string, waitMs: number ): never {
 	res.setHeader( "Retry-After", String( Math.ceil( waitMs / 1000 ) ) );
 	req.log?.warn( "http.ratelimited", { limiter: name, ip: req.ip } );
 	throw new HttpError( 429 );
