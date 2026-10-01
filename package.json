@@ -3,13 +3,19 @@
 	"version": "1.0.0",
 	"description": "Backend framework: TypeScript sources, Postgres or SQLite, secure by design.",
 	"license": "MIT",
+	"author": "Etienne Cochard",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/rlibre/z4js.git"
+	},
+	"homepage": "https://github.com/rlibre/z4js",
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
 		"./shape": "./src/shared/shape.ts"
 	},
 	"bin": {
-		"z4js": "./bin/z4js.js"
+		"z4js": "bin/z4js.js"
 	},
 	"files": [
 		"src",

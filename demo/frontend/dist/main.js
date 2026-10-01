@@ -58,6 +58,37 @@
     }
   });
 
+  // x4-internal:copy-state
+  var copy_state_default = "C:\\dev\\rlibre\\y4-2026\\demo\\frontend\\public\\index.html\x00269\x001790864304170.199";
+
+  // node_modules/x4js/cli/dev-client.js
+  var events = new EventSource("/esbuild");
+  Object.defineProperty(events, "__x4CopyState", { value: copy_state_default });
+  events.addEventListener("change", (event) => {
+    const change = JSON.parse(event.data);
+    const changed = [...change.added, ...change.removed, ...change.updated];
+    if (change.added.length === 0 && change.removed.length === 0 && change.updated.length > 0 && change.updated.every((file) => file.endsWith(".css"))) {
+      const pending = new Set(change.updated);
+      const links = document.querySelectorAll('link[rel="stylesheet"]');
+      for (const link of links) {
+        const current2 = new URL(link.href);
+        if (!pending.has(current2.pathname))
+          continue;
+        const next = link.cloneNode();
+        const url = new URL(link.href);
+        url.searchParams.set("x4", Date.now().toString());
+        next.href = url.href;
+        next.onload = () => link.remove();
+        link.after(next);
+        pending.delete(current2.pathname);
+      }
+      if (pending.size === 0)
+        return;
+    }
+    if (changed.length)
+      location.reload();
+  });
+
   // node_modules/x4js/src/core/core_i18n.ts
   var languages = {};
   function createLanguage(name, base) {
@@ -824,7 +855,7 @@
     }
   };
   __name(_EventSource, "EventSource");
-  var EventSource = _EventSource;
+  var EventSource2 = _EventSource;
 
   // node_modules/x4js/src/core/core_element.ts
   var _events, _timers, _cleanup;
@@ -991,7 +1022,7 @@
     on(name, listener) {
       console.assert(listener !== void 0 && listener !== null);
       if (!__privateGet(this, _events)) {
-        __privateSet(this, _events, new EventSource(this));
+        __privateSet(this, _events, new EventSource2(this));
       }
       __privateGet(this, _events).addListener(name, listener);
       return {
@@ -1501,7 +1532,7 @@
     return c === "." || c === "[";
   }
   __name(_path_matches, "_path_matches");
-  var _StateManager = class _StateManager extends EventSource {
+  var _StateManager = class _StateManager extends EventSource2 {
     constructor(initialState) {
       super();
       __publicField(this, "_state");
@@ -1899,9 +1930,9 @@
         * Sets multiple DOM event listeners on the component's DOM element.
         * @param events - An object where keys are event names and values are their corresponding handler functions.
         */
-    setDOMEvents(events) {
-      for (const name in events) {
-        this.addDOMEvent(name, events[name]);
+    setDOMEvents(events2) {
+      for (const name in events2) {
+        this.addDOMEvent(name, events2[name]);
       }
     }
     // :: HILEVEL EVENTS ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
