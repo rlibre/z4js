@@ -1,8 +1,8 @@
 // The notes table, and the demo accounts created on the first start.
 
 import { randomUUID } from "node:crypto";
-import { Model, hashPassword } from "@rlibre/z4js";
-import type { Db, SqliteSql } from "@rlibre/z4js";
+import { Model, hashPassword } from "@r-libre/z4js";
+import type { Db, SqliteSql } from "@r-libre/z4js";
 
 // the notes table
 export class NotesModel extends Model {

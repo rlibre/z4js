@@ -1,8 +1,8 @@
 // The live notifications: the page opens /api/live/notes (with a ticket, the group is
 // guarded) and receives an event each time a note is created or deleted.
 
-import { Channel } from "@rlibre/z4js";
-import type { WSocket } from "@rlibre/z4js";
+import { Channel } from "@r-libre/z4js";
+import type { WSocket } from "@r-libre/z4js";
 
 // the live endpoint: keeps the open sockets and sends them the note events
 export class LiveChannel extends Channel {

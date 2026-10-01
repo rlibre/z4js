@@ -2,8 +2,8 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { Mutex, Worker, runWorker, sqlite } from "@rlibre/z4js";
-import type { SqliteSql } from "@rlibre/z4js";
+import { Mutex, Worker, runWorker, sqlite } from "@r-libre/z4js";
+import type { SqliteSql } from "@r-libre/z4js";
 import type { DemoConfig } from "./config";
 
 // counts the words of the notes. the mutex shows a lock shared by every thread

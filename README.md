@@ -170,7 +170,7 @@ That is all. No ORM, no validation library, no logger, no session store, no JWT 
 ## Getting started
 
 ```
-npm install @rlibre/z4js
+npm install @r-libre/z4js
 ```
 
 Look at `demo/`: a backend (notes, accounts, step-up, live notifications through WebSocket, a worker) and its frontend.
@@ -187,7 +187,7 @@ npm install
 npm run typecheck
 ```
 
-The second type check compiles `src/shared` without the types of Node nor the DOM, so that `@rlibre/z4js/shape` stays usable on the server and on the client.
+The second type check compiles `src/shared` without the types of Node nor the DOM, so that `@r-libre/z4js/shape` stays usable on the server and on the client.
 
 ---
 

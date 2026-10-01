@@ -8,8 +8,8 @@
 //   GET    /api/me                 any user
 
 import { randomUUID } from "node:crypto";
-import { EndPoints, HttpError, noAccessCheck } from "@rlibre/z4js";
-import type { Access, Request, Response, Sessions, SqliteSql, Workers } from "@rlibre/z4js";
+import { EndPoints, HttpError, noAccessCheck } from "@r-libre/z4js";
+import type { Access, Request, Response, Sessions, SqliteSql, Workers } from "@r-libre/z4js";
 import type { LiveChannel } from "./live";
 
 interface Deps {
