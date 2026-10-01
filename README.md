@@ -71,6 +71,24 @@ An `EndPoints` object only **notes** its routes: it touches neither Express nor 
 
 ---
 
+## Files, refused unless declared
+
+```ts
+async on_import( req: Request, res: Response ) {
+	await this.need( req, "notes/create" );          // before reading a single byte
+
+	const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
+	const comment = this.bodyValue( req, "comment", "string", { required: false } );
+
+	await data.keep( join( config.data, "imports", data.id ) );   // otherwise deleted at the end of the request
+	res.status( 201 ).json( { id: data.id } );
+}
+```
+
+The file arrives with the request of the action, so the access check is the usual one, done before anything is read. Each file field is declared with its size limit and, if you want, its accepted types: an undeclared field, a second file, a missing one is a `400`, a file too large a `413`, a wrong type a `415`. Files are streamed to disk, never held whole in memory, under a random name: the name given by the client is only an information, never a path. Whatever is not kept is deleted when the answer is sent, even when the request fails or is aborted. The text fields of the form are read with `bodyValue`, as for JSON.
+
+---
+
 ## Secure by default, not by checklist
 
 Security is not a chapter at the end of the documentation. It is what happens when you write nothing special.
@@ -79,11 +97,12 @@ Security is not a chapter at the end of the documentation. It is what happens wh
 - **Sessions**: opaque tokens, no cookies, only their SHA-256 hash stored. 15 minute access tokens, refresh tokens rotated on every use, and a reused refresh token ends the session (theft detected).
 - **Passwords**: PBKDF2-SHA256, 600,000 iterations, constant time comparison. An unknown login takes as long as a wrong password. Hashes are upgraded at the next login when the settings change.
 - **Step-up**: a sensitive route adds `sessions.stepUp` as a filter. Without a recent confirmation of identity, the answer is `403 step-up required`.
-- **Access rights**: `resource/action`, `resource/*` or `*`, cached 5 seconds. In debug mode, a handler that forgets to check access is reported.
+- **Access rights**: four actions per resource, nothing else: `notes/create`, `notes/read`, `notes/update`, `notes/delete` (plus `notes/*` and `*`). An import creates, so it needs `notes/create`: no right is ever invented for a feature. Rights are cached 5 seconds. In debug mode, a handler that forgets to check access is reported.
 - **Rate limits**: login attempts per IP and per account, token refreshes, and every API route.
 - **Errors**: one central handler. The client receives a status and a short message; the cause goes to the log, never to the response.
 - **Security log**: a closed list of events (`auth.login.failed`, `auth.unauthorized`, `auth.stepup.failed`...), never filtered, in its own file.
 - **WebSockets**: in a guarded group, a socket opens only with a one-time ticket, bound to the endpoint and the user, valid one second.
+- **Uploads**: only the declared file fields, each with its size limit, streamed to disk under a random name, deleted at the end of the request unless kept.
 
 ---
 
@@ -130,7 +149,42 @@ await workers.start( "stats" );
 const result = await workers.call( "stats", "count", { texts } );
 ```
 
-Workers are classes registered by name in a single entry file. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. A long task reports its progress (`progress.step( "line 300 / 1200", 25 )`), which the user who started it follows live through a WebSocket, or everybody for a broadcast task. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
+Workers are classes registered by name in a single entry file. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
+
+A worker that runs until the server stops, a periodic backup for instance, puts its loop in `onRun`:
+
+```ts
+// copies the database every hour, until the stop
+class Backup extends Worker {
+	async onRun( ) {
+		while( await this.wait( 3_600_000 ) ) {      // false at once when the server stops
+			await this.sql`vacuum into ${target}`;
+		}
+	}
+}
+```
+
+The stop interrupts the wait, lets the current round end, then calls `onStop`. A loop that dies is logged and ends the worker: it never fails in silence.
+
+A worker bundles only what it uses: the package declares no side effect at import, so the bundler leaves Express and WebSockets out of `workers.js` (29 KB in the demo, instead of 684 KB).
+
+---
+
+## Progress you can follow
+
+```ts
+// the handler: the task id comes back at once
+const task = tasks.create( req.user );
+workers.post( "import", "run", { task, file: data.id } );
+res.status( 202 ).json( { task } );
+
+// the worker
+const progress = this.progress( data.task );
+progress.step( "line 300 / 1200", 25 );
+progress.done( "1200 lines imported" );
+```
+
+The client follows its task on a WebSocket (`{ task, phase: "start" | "step" | "end", text, percent }`), and a page reloaded in the middle catches up with the current state. The messages of a task go to the user who started it only, or to everybody for a broadcast task (a scheduled backup nobody asked for). A worker can only report on a task the main thread created, a progress left open is closed when the handler ends, and a worker that dies fails its tasks: a progress bar never spins forever.
 
 ---
 
@@ -164,7 +218,7 @@ No annotations, no decorators, no YAML in comments. The TypeScript compiler read
 | `x4build` | build (esbuild) |
 | `@fastify/busboy` | files sent with a request (multipart), streamed to disk |
 
-That is all. No ORM, no validation library, no logger, no session store, no JWT library, no upload middleware. And what Express brings along is kept in check: two aliases in the build replace the 500 KB of encoding tables of `iconv-lite` by the `TextDecoder` Node already has, and the 157 KB of `mime-db` by the 54 KB that are actually read. The demo bundle goes from 1280 KB to 776 KB. Sources are published as TypeScript, as is: what you debug is what was written.
+That is all. No ORM, no validation library, no logger, no session store, no JWT library, no upload middleware. And what Express brings along is kept in check: two aliases in the build replace the 500 KB of encoding tables of `iconv-lite` by the `TextDecoder` Node already has, and the 157 KB of `mime-db` by the 54 KB that are actually read. The demo bundle goes from 1280 KB to 776 KB, and its workers from 684 KB to 29 KB. Sources are published as TypeScript, as is: what you debug is what was written.
 
 ---
 
@@ -174,12 +228,14 @@ That is all. No ORM, no validation library, no logger, no session store, no JWT 
 npm install @r-libre/z4js
 ```
 
-Look at `demo/`: a backend (notes, accounts, step-up, live notifications through WebSocket, a worker) and its frontend.
+Look at `demo/`: a notes application, backend and frontend. It shows accounts and rights, the step-up before a deletion, live notifications through WebSocket, the import of a text file, a word count done by a worker with its progress shown live, and a periodic backup broadcast to every connected user.
 
 ```
 cd demo/frontend && npm install && npm run build
 cd ../backend && npm install && npm run build && npm start
 ```
+
+`npm run start:log` starts it with colored logs (`z4js log`).
 
 Checks for the framework itself:
 
