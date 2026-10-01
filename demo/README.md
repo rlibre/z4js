@@ -29,6 +29,7 @@ Une petite application de notes : un backend z4js et un frontend x4js.
     cd demo/frontend && npm run build      # frontend/dist
     cd demo/backend && npm run build       # backend/dist (main.js et workers.js)
     cd demo/backend && npm start           # http://127.0.0.1:4400
+    cd demo/backend && npm run start:log   # pareil, avec les logs colorés (z4js log)
 
 Pendant le développement, `npm run dev` dans `backend/` reconstruit et relance le serveur à chaque modification.
 

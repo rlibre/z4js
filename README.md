@@ -140,7 +140,7 @@ Workers are classes registered by name in a single entry file. Messages go both 
 2026-10-01T14:08:26.392Z INFO Xk2pQ9vLm3aB http.request {"method":"GET","path":"/api/notes/all","status":200,"ms":3}
 ```
 
-One line per event: date, level, request id, event name, then the data in JSON. Everything before the JSON is written by z4js; anything that came from a client goes into the JSON, escaped and truncated. Requests are logged once their answer is sent, and slow ones are flagged.
+One line per event: date, level, request id, event name, then the data in JSON. The logger never writes colors: `npm start | npx z4js log` colors the lines for reading (`--level=warn` hides the rest), the same way on a log file (`tail -f app.log | npx z4js log`). Everything before the JSON is written by z4js; anything that came from a client goes into the JSON, escaped and truncated. Requests are logged once their answer is sent, and slow ones are flagged.
 
 ---
 

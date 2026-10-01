@@ -291,6 +291,9 @@ export class Logger {
 
 // ---------------------------------------------------------------------------
 
+// the level written on the lines of the security log
+export const SECURITY_LEVEL = "SEC";
+
 // closed list: a name outside of it is a programming error
 export const SECURITY_EVENTS = [
 	"auth.login.ok",
@@ -313,7 +316,7 @@ export interface SecurityLogOptions {
 	extraEvents?: readonly string[];	// events added by the application
 }
 
-// same line format, fixed level "SEC", never filtered by level and never dropped
+// same line format, fixed level SECURITY_LEVEL, never filtered by level and never dropped
 export class SecurityLog {
 	private readonly sink: Sink;
 	private readonly allowed: ReadonlySet<string>;
@@ -335,7 +338,7 @@ export class SecurityLog {
 			checkRequestId( requestId );
 		}
 
-		this.sink.write( formatLine( "SEC", requestId, event, data ), {
+		this.sink.write( formatLine( SECURITY_LEVEL, requestId, event, data ), {
 			stderr: false,
 			droppable: false,
 			sync: false

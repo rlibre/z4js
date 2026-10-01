@@ -18,17 +18,21 @@
 // The z4js command line: development tools, run from the folder of a project.
 //
 //   z4js apidoc [--project=tsconfig.json] [--out=api.json]
+//   npm start | z4js log [--level=warn]
 
 import { writeFileSync } from "node:fs";
 import { argValue } from "../src/tools";
 import { apidoc } from "./apidoc";
+import { log } from "./log";
 
 const USAGE = `usage: z4js <command> [options]
 
 commands:
   apidoc   OpenAPI 3 description of the routes, read from the sources
            --project=<tsconfig.json>   project to read (default: tsconfig.json)
-           --out=<file>                output file (default: standard output)`;
+           --out=<file>                output file (default: standard output)
+  log      colors the log lines read on the standard input (npm start | z4js log)
+           --level=<level>             hides the lines below it (debug, info, warn, error, fatal)`;
 
 const command = process.argv[2];
 
@@ -48,6 +52,10 @@ try {
 			}
 			break;
 		}
+
+		case "log":
+			await log( argValue( "level" ) );
+			break;
 
 		default:
 			console.error( USAGE );

@@ -6,6 +6,7 @@
 		"build": "x4build build --debug",
 		"dev": "x4build dev",
 		"start": "node --enable-source-maps dist/main.js --config=env/dev.json",
+		"start:log": "npm start --silent | z4js log",
 		"apidoc": "z4js apidoc --out=api.json"
 	},
 	"dependencies": {

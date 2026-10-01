@@ -703,9 +703,12 @@ date_clone, date_hash, date_calc_weeknum, calcAge, date_sql_utc
 
 ```
 z4js apidoc [--project=tsconfig.json] [--out=api.json]
+npm start | z4js log [--level=warn]
 ```
 
-Writes the OpenAPI 3 description of the routes, read from the sources by the TypeScript compiler (nothing runs). Found: groups, routes, path/query/body values with their types and options (literals only), `res.status( n )`, `new HttpError( code, message )`, known filters (guard, step-up, rate limiter), the comment above each handler. Non-literal values are reported as warnings.
+`log` colors the log lines read on the standard input, by level, when the output is a terminal (`NO_COLOR` disables it); `--level` hides the lines below a level, the security lines (`SEC`) are always shown. The logger itself never writes colors.
+
+`apidoc` writes the OpenAPI 3 description of the routes, read from the sources by the TypeScript compiler (nothing runs). Found: groups, routes, path/query/body values with their types and options (literals only), `res.status( n )`, `new HttpError( code, message )`, known filters (guard, step-up, rate limiter), the comment above each handler. Non-literal values are reported as warnings.
 
 ---
 
