@@ -1,0 +1,19 @@
+{
+	"entryPoints": [
+		"src/main.ts"
+	],
+	"outdir": "dist",
+	"copy": [
+		{
+			"from": "public",
+			"to": "."
+		}
+	],
+	"define": {
+		"API_URL": "\"http://127.0.0.1:4400\""
+	},
+	"dev": {
+		"host": "127.0.0.1",
+		"port": 8000
+	}
+}
