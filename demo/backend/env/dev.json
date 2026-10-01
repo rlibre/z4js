@@ -1,0 +1,13 @@
+// configuration of the demo: every relative path is relative to this folder
+{
+	"mode": "debug",
+	"server": {
+		"host": "127.0.0.1",
+		"port": 4400,
+		// the dev server of the frontend calls the API from another origin
+		"cors": ["http://127.0.0.1:8000"]
+	},
+	"log": { "level": "info" },
+	"data": "../data",
+	"www": "../../frontend/dist"
+}

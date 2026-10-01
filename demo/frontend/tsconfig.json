@@ -1,0 +1,16 @@
+{
+	// type checking only: x4js build (esbuild) does the build
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"experimentalDecorators": true,
+		"strict": true,
+		"strictNullChecks": false,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"types": []
+	},
+	"include": ["src", "node_modules/x4js/src/types"]
+}
