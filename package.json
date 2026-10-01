@@ -1,5 +1,5 @@
 {
-	"name": "z4js",
+	"name": "@rlibre/z4js",
 	"version": "1.0.1",
 	"description": "Backend framework: TypeScript sources, Postgres or SQLite, secure by design.",
 	"license": "MIT",

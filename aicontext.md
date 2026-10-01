@@ -10,8 +10,8 @@
 z4js is a TypeScript backend framework for Node. Express 5, Postgres (postgres.js) or SQLite (`node:sqlite`), WebSockets (`ws`). Its UI counterpart is x4js.
 
 ```ts
-import { ... } from "z4js"           // src/index.ts: everything
-import { Shape } from "z4js/shape" // src/shared/shape.ts: also usable in a browser
+import { ... } from "@rlibre/z4js"           // src/index.ts: everything
+import { Shape } from "@rlibre/z4js/shape" // src/shared/shape.ts: also usable in a browser
 ```
 
 - Sources are published as TypeScript, as is. The application bundles them with x4build (esbuild).
@@ -57,7 +57,7 @@ Worker / Workers            background threads (worker side / main side)
 Mutex                       named lock shared by every thread
 Logger / SecurityLog        line + JSON logs; closed list of security events
 HttpError                   an error that answers with its status and a short message
-Shape                       validators (z4js/shape), never mandatory
+Shape                       validators (@rlibre/z4js/shape), never mandatory
 WSocket / WSData            an open socket, a received message
 ```
 
@@ -549,7 +549,7 @@ Line format: `<ISO date> <LEVEL> <request id or -> <event> [<JSON data>]`. Every
 
 ---
 
-## `Shape` (`z4js/shape`, `src/shared/shape.ts`)
+## `Shape` (`@rlibre/z4js/shape`, `src/shared/shape.ts`)
 
 Never mandatory. No Node or browser dependency.
 
@@ -624,7 +624,7 @@ Writes the OpenAPI 3 description of the routes, read from the sources by the Typ
 
 ```ts
 import { join } from "node:path"
-import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "z4js"
+import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "@rlibre/z4js"
 import { AppConfig } from "./config"
 import { NotesEP } from "./notes"
 
@@ -671,7 +671,7 @@ await serve( {
 ### Application configuration
 
 ```ts
-import { Config } from "z4js"
+import { Config } from "@rlibre/z4js"
 
 // the configuration of the application
 export class AppConfig extends Config {
@@ -688,8 +688,8 @@ export class AppConfig extends Config {
 ### EndPoints
 
 ```ts
-import { EndPoints, HttpError } from "z4js"
-import type { Access, Request, Response, SqliteSql } from "z4js"
+import { EndPoints, HttpError } from "@rlibre/z4js"
+import type { Access, Request, Response, SqliteSql } from "@rlibre/z4js"
 
 // the routes of the notes
 export class NotesEP extends EndPoints {
@@ -728,8 +728,8 @@ export class NotesEP extends EndPoints {
 ### Model
 
 ```ts
-import { Model } from "z4js"
-import type { Db } from "z4js"
+import { Model } from "@rlibre/z4js"
+import type { Db } from "@rlibre/z4js"
 
 // the notes table
 export class NotesModel extends Model {
@@ -754,8 +754,8 @@ export const notesModel = new NotesModel( )
 ### WebSocket endpoint
 
 ```ts
-import { Channel } from "z4js"
-import type { WSocket } from "z4js"
+import { Channel } from "@rlibre/z4js"
+import type { WSocket } from "@rlibre/z4js"
 
 // live notifications of the notes
 export class LiveChannel extends Channel {
@@ -781,7 +781,7 @@ export class LiveChannel extends Channel {
 ### Worker entry file
 
 ```ts
-import { Mutex, Worker, runWorker } from "z4js"
+import { Mutex, Worker, runWorker } from "@rlibre/z4js"
 
 // counts the words of the notes
 class Stats extends Worker {
@@ -817,7 +817,7 @@ runWorker( )
 		"apidoc": "z4js apidoc --out=api.json"
 	},
 	"dependencies": {
-		"z4js": "latest"
+		"@rlibre/z4js": "latest"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
@@ -898,4 +898,4 @@ The banner gives `require` to the CommonJS dependencies bundled in an ESM output
 - Mutex names are fixed strings, never built from data.
 - `res.locals.expectedSlow` exists for `/login` only (password hashing). Do not use it elsewhere.
 - `strictNullChecks` is off on purpose: test with `!v`, write no `| null` / `| undefined`.
-- When an API is unclear, read the installed sources: `node_modules/z4js/src/`.
+- When an API is unclear, read the installed sources: `node_modules/@rlibre/z4js/src/`.

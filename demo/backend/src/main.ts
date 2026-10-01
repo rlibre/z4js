@@ -1,7 +1,7 @@
 // Entry point of the demo: configuration, database, sessions, routes, workers, server.
 
 import { join } from "node:path";
-import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "z4js";
+import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "@rlibre/z4js";
 import { DemoConfig } from "./config";
 import { LiveChannel } from "./live";
 import { seed } from "./models";

@@ -1,7 +1,7 @@
 // The configuration of the demo: the one of z4js (server, tls, log, session...)
 // plus the folders of the demo and the period of its backup.
 
-import { Config } from "z4js";
+import { Config } from "@rlibre/z4js";
 
 // the configuration of the demo backend
 export class DemoConfig extends Config {

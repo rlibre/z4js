@@ -9,6 +9,6 @@
 		"apidoc": "z4js apidoc --out=api.json"
 	},
 	"dependencies": {
-		"z4js": "file:../.."
+		"@rlibre/z4js": "file:../.."
 	}
 }

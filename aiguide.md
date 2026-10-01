@@ -3,7 +3,7 @@
 This document explains how to write idiomatic z4js code.
 This is not a suggestion but an imperative rule.
 
-For exact classes, properties and method signatures, always use `aicontext.md` or inspect the z4js TypeScript sources (`node_modules/z4js/src/`).
+For exact classes, properties and method signatures, always use `aicontext.md` or inspect the z4js TypeScript sources (`node_modules/@rlibre/z4js/src/`).
 
 **Do not invent z4js APIs.**
 
@@ -314,7 +314,7 @@ The npm package distributes the z4js TypeScript sources.
 When an API is unclear:
 
 1. check `aicontext.md`;
-2. inspect the installed source in `node_modules/z4js/src/`;
+2. inspect the installed source in `node_modules/@rlibre/z4js/src/`;
 3. only then generate code.
 
 Never infer a z4js API from NestJS, Fastify, Koa, AdonisJS or plain Express habits.
