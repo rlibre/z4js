@@ -1,12 +1,28 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file params.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Extraction and validation of one named value from route params, query string or
-// body. This is what paramValue / bodyValue / queryValue of the Controller use.
+// body. This is what paramValue / bodyValue / queryValue of EndPoints use.
 //
 // Conversions are intentionally tolerant (a number becomes a string, "yes"/"1" is
 // true...), because URL parameters always arrive as strings. Everything else is
 // strict: a bad value is a 400 that names the parameter and never echoes the value.
 
 import { HttpError } from "./http-error";
-import { isPlainObject, isString, isUUID, parseSqlDate, toUUID } from "./tools";
+import { groupInt, isPlainObject, isString, isUUID, parseSqlDate, toUUID } from "./tools";
 import type { UUID } from "./tools";
 
 // TypeScript type of the value returned for each kind of parameter
@@ -49,10 +65,6 @@ const FALSE_VALUES = new Set<unknown>( [false, "false", "no", "0", 0] );
 
 function badType( name: string, detail = "" ): HttpError {
 	return new HttpError( 400, `Bad parameter type for "${name}"${detail}` );
-}
-
-function toInt( match: RegExpExecArray, index: number ): number {
-	return match[index] === undefined ? 0 : parseInt( match[index], 10 );
 }
 
 export function getParam( from: unknown, name: string, type: ArgType, mode?: ValueType ): any {
@@ -210,7 +222,7 @@ export function getParam( from: unknown, name: string, type: ArgType, mode?: Val
 
 		case "time": {
 			const m = typeof val === "string" ? TIME_RE.exec( val ) : null;
-			if( !m || toInt( m, 1 ) > 23 || toInt( m, 2 ) > 59 || toInt( m, 3 ) > 59 ) {
+			if( !m || groupInt( m, 1 ) > 23 || groupInt( m, 2 ) > 59 || groupInt( m, 3 ) > 59 ) {
 				throw badType( name, " invalid time format" );
 			}
 			break;

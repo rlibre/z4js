@@ -1,4 +1,20 @@
-// General tools: type checks, strings, object paths, dates, uuid.
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file tools.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
+// General tools: type checks, strings, object paths, dates (uuid: see shared/tools.ts).
 
 import { checkedDate } from "./shared/tools";
 
@@ -13,7 +29,7 @@ export function isNumber( v: unknown ): v is number {
 	return typeof v === "number" && Number.isFinite( v );
 }
 
-// integers beyond Number.MAX_SAFE_INTEGER are refused, as everywhere in y4js (precision is lost)
+// integers beyond Number.MAX_SAFE_INTEGER are refused, as everywhere in z4js (precision is lost)
 export function isIntNumber( v: unknown ): v is number {
 	return Number.isSafeInteger( v );
 }
@@ -37,8 +53,8 @@ export function isDate( v: unknown ): v is Date {
 }
 
 // no Node dependency: usable on the client too
-export { isPlainObject, checkedDate, parseSqlDate } from "./shared/tools";
-export type { SqlDatePart } from "./shared/tools";
+export { isPlainObject, groupInt, checkedDate, parseSqlDate, isUUID, toUUID } from "./shared/tools";
+export type { SqlDatePart, UUID } from "./shared/tools";
 
 // generic constructor definition
 export type Constructor<P> = {
@@ -58,10 +74,35 @@ export function deepFreeze<T>( obj: T ): T {
 	return Object.freeze( obj );
 }
 
+// value of a command line option: --name=value or --name value, null if absent
+export function argValue( name: string, args = process.argv ): string {
+	const flag = "--" + name;
+
+	for( let i = 0; i < args.length; i++ ) {
+		if( args[i].startsWith( flag + "=" ) ) {
+			return args[i].slice( flag.length + 1 );
+		}
+
+		if( args[i] === flag ) {
+			return args[i + 1] ?? null;
+		}
+	}
+
+	return null;
+}
+
 // string code of an error (Node, database drivers: "ENOENT", SQLSTATE...), "" if none
 export function errorCode( e: unknown ): string {
 	const code = ( e as { code?: unknown } )?.code;
 	return isString( code ) ? code : "";
+}
+
+// a Map used as a bounded cache keeps the insertion order: its first keys are the
+// oldest. drops them until there is room for one more entry
+export function dropOldest( map: Map<unknown, unknown>, max: number ) {
+	while( map.size > 0 && map.size >= max ) {
+		map.delete( map.keys( ).next( ).value );
+	}
 }
 
 export function clamp<T>( v: T, min: T, max: T ): T {
@@ -81,7 +122,7 @@ export function clamp<T>( v: T, min: T, max: T ): T {
 // size > 0: pad at the end, size < 0: pad at the start
 // pad( 5, -2 ) -> "05"
 export function pad( what: any, size: number, ch = "0" ): string {
-	const value = isString( what ) ? what : "" + what;
+	const value = String( what );
 	return size > 0 ? value.padEnd( size, ch ) : value.padStart( -size, ch );
 }
 
@@ -396,28 +437,4 @@ export function formatIntlDate( date: Date, fmt: string, utc = false ): string {
 	}
 
 	return result;
-}
-
-// -- uuid ---------------------------------------------------------------------
-
-// a string checked as an UUID: a plain string is refused where an UUID is expected,
-// it must go through toUUID (or paramValue "uuid"). no cost at run time
-export type UUID = string & { readonly __brand: "uuid" };
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// format check only: an uppercase UUID passes, but is not normalized (see toUUID)
-export function isUUID( v: unknown ): v is UUID {
-	return typeof v === "string" && UUID_RE.test( v );
-}
-
-// the UUID in lowercase, as Postgres outputs it: two writings of the same UUID
-// then compare equal (===, Map keys, SQLite text). throws if v is not an UUID
-// (the message never contains the value)
-export function toUUID( v: unknown ): UUID {
-	if( !isUUID( v ) ) {
-		throw new TypeError( "invalid UUID" );
-	}
-
-	return v.toLowerCase( ) as UUID;
 }

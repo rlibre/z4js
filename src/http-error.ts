@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file http-error.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // HTTP error carrying a status code. The central error handler sends only the
 // status and the message; the cause (if any) is logged but never sent.
 
@@ -50,6 +66,11 @@ const STATUS_TEXT: Record<number, string> = {
 	511: "Network Authentication Required"
 };
 
+// standard text of a status ("Not Found"), "Error" if unknown
+export function statusText( code: number ): string {
+	return STATUS_TEXT[code] ?? "Error";
+}
+
 // an error that answers the request with its status and a short message
 export class HttpError extends Error {
 	readonly code: number;
@@ -57,7 +78,7 @@ export class HttpError extends Error {
 	// message defaults to the standard text of the status
 	// cause is the original error: logged by the error handler, never sent to the client
 	constructor( code: number, message?: string, options?: { cause?: unknown } ) {
-		super( message ?? STATUS_TEXT[code] ?? "Error", options );
+		super( message ?? statusText( code ), options );
 		this.name = "HttpError";
 		this.code = code;
 	}

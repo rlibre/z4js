@@ -1,13 +1,14 @@
 {
-	"name": "y4js-demo",
+	"name": "z4js-demo",
 	"private": true,
 	"type": "module",
 	"scripts": {
 		"build": "x4build build --debug",
 		"dev": "x4build dev",
-		"start": "node --enable-source-maps dist/main.js --config=env/dev.json"
+		"start": "node --enable-source-maps dist/main.js --config=env/dev.json",
+		"apidoc": "z4js apidoc --out=api.json"
 	},
 	"dependencies": {
-		"y4js": "file:../.."
+		"@r-libre/z4js": "file:../.."
 	}
 }

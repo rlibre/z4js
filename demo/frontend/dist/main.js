@@ -59,7 +59,7 @@
   });
 
   // x4-internal:copy-state
-  var copy_state_default = "C:\\dev\\rlibre\\y4-2026\\demo\\frontend\\public\\index.html\x00269\x001790859294448.9421";
+  var copy_state_default = "C:\\dev\\rlibre\\y4-2026\\demo\\frontend\\public\\index.html\x00269\x001790864304170.199";
 
   // node_modules/x4js/cli/dev-client.js
   var events = new EventSource("/esbuild");

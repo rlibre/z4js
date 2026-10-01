@@ -1,7 +1,7 @@
-// The configuration of the demo: the one of y4js (server, tls, log, session...)
-// plus the folders of the demo.
+// The configuration of the demo: the one of z4js (server, tls, log, session...)
+// plus the folders of the demo and the period of its backup.
 
-import { Config } from "y4js";
+import { Config } from "@r-libre/z4js";
 
 // the configuration of the demo backend
 export class DemoConfig extends Config {
@@ -10,4 +10,7 @@ export class DemoConfig extends Config {
 
 	// the web page
 	readonly www = this.folder( "www" );
+
+	// the backup worker copies the database that often (data/backup/demo.db)
+	readonly backupMinutes = this.int( "backupMinutes", { def: 1, min: 1 } );
 }

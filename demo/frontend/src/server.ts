@@ -1,4 +1,4 @@
-// Access to the y4js backend: the session tokens (memory only, a reload
+// Access to the z4js backend: the session tokens (memory only, a reload
 // logs out), a refresh on 401, the password asked again when a route needs a step-up,
 // and the live events, fired as global messages ("note.created", "note.deleted"):
 // the views do not know they come through a WebSocket.
@@ -86,7 +86,7 @@ class Server {
 		const json = await res.json( ).catch( ( ): any => null );
 
 		if( !res.ok ) {
-			// y4js answers { error: "short message" }, never more
+			// z4js answers { error: "short message" }, never more
 			const error: ServerError = Object.assign( new Error( json?.error ?? res.statusText ), { status: res.status } );
 			throw error;
 		}

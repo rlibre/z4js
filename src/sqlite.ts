@@ -1,3 +1,19 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file sqlite.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // SQLite access in the tagged template style of postgres.js, built on
 // node:sqlite (no dependency). Meant for small projects and desktop mode,
 // Postgres stays the choice for sites.
@@ -18,16 +34,17 @@
 // node:sqlite is loaded by the first sqlite( ) call only: a Postgres project never loads it
 import type { DatabaseSync, SQLInputValue, SQLOutputValue, StatementSync } from "node:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isDate, isIntNumber, isNumber, isPlainObject, isUIntNumber } from "./tools";
+import { dropOldest, isDate, isIntNumber, isNumber, isPlainObject, isUIntNumber } from "./tools";
 
 const DEFAULT_CACHE_SIZE = 100;
+const FINISHED = "sqlite: the transaction is finished";
 const DEFAULT_MAX_TRANSACTION_MS = 30_000;
 
 // code of the error rejecting a transaction rolled back by maxTransactionMs
 export const TX_TIMEOUT_CODE = "SQLITE_TX_TIMEOUT";
 
 // marks the handles made here, so that shared code (models) can tell SQLite from Postgres
-const SQLITE_HANDLE = Symbol( "y4js.sqlite" );
+const SQLITE_HANDLE = Symbol( "z4js.sqlite" );
 
 export function isSqlite( db: unknown ): db is SqliteSql | SqliteTx {
 	return typeof db === "function" && SQLITE_HANDLE in db;
@@ -404,7 +421,7 @@ class Engine {
 
 			if( txn ) {
 				if( !isActive( txn ) ) {
-					throw new Error( "sqlite: the transaction is finished" );
+					throw new Error( FINISHED );
 				}
 
 				return Promise.resolve( this.exec( text, params ) );
@@ -457,10 +474,10 @@ class Engine {
 
 	savepoint<R>( parent: Txn, fn: ( tx: SqliteTx ) => R | Promise<R> ): Promise<R> {
 		if( !isActive( parent ) ) {
-			return Promise.reject( new Error( "sqlite: the transaction is finished" ) );
+			return Promise.reject( new Error( FINISHED ) );
 		}
 
-		const name = `y4_sp${++this.savepoints}`;
+		const name = `__savepoint${++this.savepoints}`;
 		const txn: Txn = { done: false, parent };
 
 		try {
@@ -474,7 +491,7 @@ class Engine {
 			v => {
 				txn.done = true;
 				if( !isActive( parent ) ) {
-					throw new Error( "sqlite: the transaction is finished" );
+					throw new Error( FINISHED );
 				}
 
 				this.db.exec( `release ${name}` );
@@ -594,7 +611,7 @@ class Engine {
 	// runs the waiting work in order, until a queued transaction takes the connection
 	private drain( ): void {
 		while( !this.current && this.queue.length > 0 ) {
-			this.queue.shift( )!( );
+			this.queue.shift( )( );
 		}
 	}
 
@@ -642,10 +659,7 @@ class Engine {
 		const p: Prepared = { stmt, reader: columns.length > 0, converters };
 
 		if( this.cacheSize > 0 ) {
-			if( this.cache.size >= this.cacheSize ) {
-				this.cache.delete( this.cache.keys( ).next( ).value! );
-			}
-
+			dropOldest( this.cache, this.cacheSize );
 			this.cache.set( text, p );
 		}
 

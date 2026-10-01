@@ -1,8 +1,8 @@
-# Démo y4js
+# Démo z4js
 
-Une petite application de notes : un backend y4js et un frontend x4js.
+Une petite application de notes : un backend z4js et un frontend x4js.
 
-- `backend/` : serveur y4js (SQLite, sessions, droits, step-up, WebSocket, worker), construit par x4build.
+- `backend/` : serveur z4js (SQLite, sessions, droits, step-up, WebSocket, workers), construit par x4build.
 - `frontend/` : interface x4js, construite par x4js, servie par le backend.
 
 ## Ce qu'elle montre
@@ -15,6 +15,7 @@ Une petite application de notes : un backend y4js et un frontend x4js.
 - Suppression d'une note protégée par un step-up : le mot de passe est redemandé.
 - Notifications en direct (WebSocket avec ticket) quand une note est créée ou supprimée.
 - Comptage des mots fait par un worker (`stats`), avec un mutex partagé.
+- Sauvegarde périodique de la base par un worker qui tourne jusqu'à l'arrêt (`backup`, `onRun`) : `data/backup/demo.db`, toutes les `backupMinutes` (1 par défaut).
 
 ## Installation
 
@@ -36,7 +37,7 @@ Configuration de lancement (`.vscode/launch.json`) :
     {
         "type": "node",
         "request": "launch",
-        "name": "démo y4js",
+        "name": "démo z4js",
         "cwd": "${workspaceFolder}/demo/backend",
         "program": "${workspaceFolder}/demo/backend/dist/main.js",
         "args": ["--config=env/dev.json"],

@@ -1,8 +1,24 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file index.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 export { HttpError } from "./http-error";
 export { Logger, SecurityLog, SECURITY_EVENTS, LOG_LEVELS } from "./logger";
 export type { LogLevel, LoggerOptions, SecurityEvent, SecurityLogOptions } from "./logger";
-export { Schema, SchemaError, ObjectValidator } from "./shared/schema";
-export type { DateFormat } from "./shared/schema";
+export { Shape, ShapeError, ObjectValidator } from "./shared/shape";
+export type { DateFormat } from "./shared/shape";
 export * from "./tools";
 export { Model, MigrationError, isInfraError } from "./model";
 export type { MigrateFailure, MigrateOptions, Db, DbRoot } from "./model";
@@ -16,11 +32,11 @@ export { Config, ConfigError } from "./config";
 export type { ConfigOptions, NumberOptions, FolderOptions, FileOptions } from "./config";
 export { sqlite, isSqlite, Query, Helper, TX_TIMEOUT_CODE } from "./sqlite";
 export type { SqliteSql, SqliteTx, SqliteOptions, BeginOptions, Row, Result, ResultMeta } from "./sqlite";
-export { Controller, RouteGroup } from "./controller";
+export { EndPoints, RouteGroup } from "./endpoints";
 export { checkPath } from "./paths";
-export { WSController, WSocket, WSData, WSDataError, createUpgradeHandler } from "./ws";
+export { Channel, WSocket, WSData, WSDataError, createUpgradeHandler } from "./ws";
 export type { WSHandler, WSMessageHandler, WSOptions, WSRouteDef, UpgradeOptions, UpgradeHandler } from "./ws";
-export type { Request, Response, Handler, Method, RouteDef, RouteInfo, RouteOptions } from "./controller";
+export type { Request, Response, Handler, Method, RouteDef, RouteInfo, RouteOptions } from "./endpoints";
 export { createErrorHandler, notFoundHandler } from "./http-handlers";
 export { Worker, Workers, runWorker } from "./workers";
 export type { WorkerOptions, WorkerLog, WorkersOptions, WorkerInfo } from "./workers";

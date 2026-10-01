@@ -1,16 +1,32 @@
-// Base class of all controllers, and groups of routes.
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file endpoints.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
+// End points (the HTTP routes of a domain), and groups of routes.
 //
-// A controller only NOTES its routes (method, path, handler, options): it touches
+// An EndPoints object only NOTES its routes (method, path, handler, options): it touches
 // neither Express nor the configuration, so it can safely be created at import time.
-// Routes reach Express only through a RouteGroup, mounted by y4js in the main.
+// Routes reach Express only through a RouteGroup, mounted by z4js in the main.
 
 import { Router } from "express";
 import type { Request, Response, RequestHandler } from "express";
 import { getParam } from "./params";
 import type { ArgType, ArgTypes, ValueType } from "./params";
 import { noAccessCheck } from "./access";
-import { checkFixedPath, checkPath, joinPath, routeKey } from "./paths";
-import { TicketStore, WSController } from "./ws";
+import { checkFixedPath, checkPath, joinPath, routeKey, RouteList } from "./paths";
+import { Channel, TicketStore } from "./ws";
 import type { WSRouteDef } from "./ws";
 
 export type { Request, Response };
@@ -32,14 +48,13 @@ export interface RouteDef {
 	readonly filters: readonly RequestHandler[];
 }
 
-// base class of the HTTP controllers: notes the routes of a resource and reads the
+// base class of the HTTP end points of a domain: notes its routes and reads the
 // values of a request (paramValue, bodyValue, queryValue). mounted by a RouteGroup
-export class Controller {
-	private readonly _routes: RouteDef[] = [];
-	private readonly _keys = new Set<string>( );
+export class EndPoints {
+	private readonly list = new RouteList<RouteDef>( );
 
 	get routes(): readonly RouteDef[] {
-		return this._routes;
+		return this.list.all;
 	}
 
 	get( url: string, handler: Handler, options?: RouteOptions ) { this.route( "get", url, handler, options ); }
@@ -51,18 +66,11 @@ export class Controller {
 	protected route( method: Method, url: string, handler: Handler, options: RouteOptions = {} ) {
 		checkPath( url );
 
-		const key = routeKey( method, url );
-		if( this._keys.has( key ) ) {
-			throw new Error( `duplicate route ${key}` );
-		}
-
-		this._keys.add( key );
-
 		const filter = options.filter;
 		const filters = filter === undefined ? [] : Array.isArray( filter ) ? filter : [filter];
 
-		// handlers are written as methods and given unbound: they run with the controller as "this"
-		this._routes.push( Object.freeze( { method, path: url, handler: handler.bind( this ) as Handler, filters } ) );
+		// handlers are written as methods and given unbound: they run with the end points object as "this"
+		this.list.add( routeKey( method, url ), { method, path: url, handler: handler.bind( this ) as Handler, filters } );
 	}
 
 	// -- reading values of a request ------------------------------------------
@@ -93,18 +101,18 @@ export interface RouteInfo {
 	guarded: boolean;
 }
 
-// a prefix, the controllers mounted under it (each one on its own sub-path), and
+// a prefix, the end points and channels mounted under it (each one on its own sub-path), and
 // whether a guard runs first. The two constructors make the choice explicit: an
 // unprotected group stands out in the main.
 //
 //   RouteGroup.guarded( "/api/v1", sessionGuard )
-//       .add( "/bed", bedController )        // -> /api/v1/bed/all, /api/v1/bed/item/:id...
-//       .add( "/live", liveController );     // WSController: see ws.ts
+//       .add( "/bed", bedEP )                // -> /api/v1/bed/all, /api/v1/bed/item/:id...
+//       .add( "/live", liveChannel );        // Channel: see ws.ts
 //
 // In a guarded group, each WebSocket endpoint also gets a POST route on the same path
 // that issues its one-time tickets (behind the guard, like every route of the group)
 export class RouteGroup {
-	private readonly entries: { path: string, controller: Controller | WSController }[] = [];
+	private readonly entries: { path: string, target: EndPoints | Channel }[] = [];
 	private readonly keys = new Set<string>( );
 	private readonly tickets: TicketStore;
 
@@ -123,9 +131,9 @@ export class RouteGroup {
 		return new RouteGroup( prefix, null );
 	}
 
-	// mounts the controller on path, inside the group ("/" for the group prefix itself).
-	// a controller may be added to several groups (api/v1 and api/v2)
-	add( path: string, controller: Controller | WSController ): this {
+	// mounts the end points or the channel on path, inside the group ("/" for the group
+	// prefix itself). the same object may be added to several groups (api/v1 and api/v2)
+	add( path: string, target: EndPoints | Channel ): this {
 		checkFixedPath( path );
 
 		const added = new Set<string>( );
@@ -138,8 +146,8 @@ export class RouteGroup {
 			added.add( key );
 		};
 
-		if( controller instanceof WSController ) {
-			for( const route of controller.routes ) {
+		if( target instanceof Channel ) {
+			for( const route of target.routes ) {
 				reserve( "ws", route.path );
 				if( this.tickets ) {
 					reserve( "post", route.path );
@@ -147,13 +155,13 @@ export class RouteGroup {
 			}
 		}
 		else {
-			for( const route of controller.routes ) {
+			for( const route of target.routes ) {
 				reserve( route.method, route.path );
 			}
 		}
 
 		added.forEach( k => this.keys.add( k ) );
-		this.entries.push( { path, controller } );
+		this.entries.push( { path, target } );
 		return this;
 	}
 
@@ -163,8 +171,8 @@ export class RouteGroup {
 		const full = ( path: string ) => joinPath( this.prefix, path );
 
 		return [
-			...this.mounted( Controller ).map( ( { path, route } ) => ( { method: route.method, path: full( path ), guarded } ) ),
-			...this.mounted( WSController ).flatMap( ( { path } ) => {
+			...this.mounted( EndPoints ).map( ( { path, route } ) => ( { method: route.method, path: full( path ), guarded } ) ),
+			...this.mounted( Channel ).flatMap( ( { path } ) => {
 				const ws: RouteInfo = { method: "ws", path: full( path ), guarded };
 				return this.tickets ? [ws, { method: "post" as const, path: full( path ), guarded }] : [ws];
 			} )
@@ -179,13 +187,13 @@ export class RouteGroup {
 			router.use( this.guard );
 		}
 
-		for( const { path, route } of this.mounted( Controller ) ) {
+		for( const { path, route } of this.mounted( EndPoints ) ) {
 			router.route( path )[route.method]( ...route.filters, route.handler as RequestHandler );
 		}
 
 		// the guard has set req.user: the ticket carries it to the socket
 		if( this.tickets ) {
-			for( const { path } of this.mounted( WSController ) ) {
+			for( const { path } of this.mounted( Channel ) ) {
 				const endpoint = joinPath( this.prefix, path );
 				router.post( path, ( req, res ) => {
 					// a session is enough for a ticket: an endpoint that needs a right checks
@@ -201,14 +209,14 @@ export class RouteGroup {
 
 	// the WebSocket endpoints, full paths, for createUpgradeHandler (ws.ts)
 	sockets( ): { path: string, route: WSRouteDef, tickets: TicketStore }[] {
-		return this.mounted( WSController ).map( ( { path, route } ) => ( { path: joinPath( this.prefix, path ), route, tickets: this.tickets } ) );
+		return this.mounted( Channel ).map( ( { path, route } ) => ( { path: joinPath( this.prefix, path ), route, tickets: this.tickets } ) );
 	}
 
-	// every route of the given kind of controller, with its path inside the group
-	// (controller path + route path)
+	// every route of the given kind of target, with its path inside the group
+	// (target path + route path)
 	private mounted<R extends { path: string }>( kind: new ( ) => { routes: readonly R[] } ): { path: string, route: R }[] {
-		return this.entries.flatMap( e => e.controller instanceof kind
-			? e.controller.routes.map( route => ( { path: joinPath( e.path, route.path ), route } ) )
+		return this.entries.flatMap( e => e.target instanceof kind
+			? e.target.routes.map( route => ( { path: joinPath( e.path, route.path ), route } ) )
 			: [] );
 	}
 }

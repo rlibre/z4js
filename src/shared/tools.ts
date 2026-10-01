@@ -1,5 +1,21 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file tools.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // Tools with no Node or browser dependency: usable on the server and on the client.
-// src/tools.ts re-exports them, so y4js code imports everything from one place.
+// src/tools.ts re-exports them, so z4js code imports everything from one place.
 
 // object literal or Object.create( null ): not an array, a Date, a Map, a class instance...
 export function isPlainObject( v: unknown ): v is Record<string, any> {
@@ -9,6 +25,11 @@ export function isPlainObject( v: unknown ): v is Record<string, any> {
 
 	const proto = Object.getPrototypeOf( v );
 	return proto === Object.prototype || !proto;
+}
+
+// the integer captured by group i of a regex match, 0 if the group did not match
+export function groupInt( m: RegExpExecArray, i: number ): number {
+	return m[i] === undefined ? 0 : parseInt( m[i], 10 );
 }
 
 // the date built from its parts, null if it does not exist: Date silently moves
@@ -47,8 +68,32 @@ export function parseSqlDate( text: string, part: SqlDatePart, utc: boolean ): D
 		return null;
 	}
 
-	const int = ( i: number ) => m[i] === undefined ? 0 : parseInt( m[i], 10 );
 	const ms = m[8] ? parseInt( m[8].padEnd( 3, "0" ), 10 ) : 0;
 
-	return checkedDate( utc || m[9] === "Z", int( 1 ), int( 3 ), int( 4 ), int( 5 ), int( 6 ), int( 7 ), ms );
+	return checkedDate( utc || m[9] === "Z", groupInt( m, 1 ), groupInt( m, 3 ), groupInt( m, 4 ),
+		groupInt( m, 5 ), groupInt( m, 6 ), groupInt( m, 7 ), ms );
+}
+
+// -- uuid ---------------------------------------------------------------------
+
+// a string checked as an UUID: a plain string is refused where an UUID is expected,
+// it must go through toUUID (or paramValue "uuid"). no cost at run time
+export type UUID = string & { readonly __brand: "uuid" };
+
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// format check only: an uppercase UUID passes, but is not normalized (see toUUID)
+export function isUUID( v: unknown ): v is UUID {
+	return typeof v === "string" && UUID_RE.test( v );
+}
+
+// the UUID in lowercase, as Postgres outputs it: two writings of the same UUID
+// then compare equal (===, Map keys, SQLite text). throws if v is not an UUID
+// (the message never contains the value)
+export function toUUID( v: unknown ): UUID {
+	if( !isUUID( v ) ) {
+		throw new TypeError( "invalid UUID" );
+	}
+
+	return v.toLowerCase( ) as UUID;
 }

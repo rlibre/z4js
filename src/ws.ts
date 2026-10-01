@@ -1,6 +1,22 @@
+/**
+ *     _____ __
+ *    |__   /  / _
+ *      /  /  /_| |_
+ *     /  /\____   _|
+ *    /_____|   |_|
+ *
+ * @file ws.ts
+ * @author Etienne Cochard
+ *
+ * @copyright (c) 2026 R-libre ingenierie
+ *
+ * Use of this source code is governed by an MIT-style license
+ * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
+ **/
+
 // WebSocket endpoints.
 //
-// A WSController notes its endpoints (path + handler), like a Controller: it touches
+// A Channel notes its endpoints (path + handler), like an EndPoints object: it touches
 // neither the HTTP server nor the configuration. It is added to a RouteGroup, and the
 // group decides the protection:
 //
@@ -14,23 +30,22 @@
 // The ticket only needs a session: an endpoint that needs a right checks it in its
 // onOpen, with userHasAccess( socket.user, "..." ), and closes the socket otherwise.
 //
-// There is no Origin check: y4js has no cookie, and a ticket can only be obtained with
+// There is no Origin check: z4js has no cookie, and a ticket can only be obtained with
 // the Authorization header, which a page of another site cannot send for the user.
 //
 // Every upgrade goes through one listener (ws in noServer mode), see createUpgradeHandler.
 // The messages of one socket are handled one after the other, in order.
 
 import { randomBytes } from "node:crypto";
-import { STATUS_CODES } from "node:http";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { RawData, WebSocket } from "ws";
-import type { RouteGroup } from "./controller";
-import { HttpError } from "./http-error";
+import type { RouteGroup } from "./endpoints";
+import { HttpError, statusText } from "./http-error";
 import type { Logger } from "./logger";
-import { checkFixedPath, routeKey } from "./paths";
-import { isString, isUIntNumber } from "./tools";
+import { checkFixedPath, routeKey, RouteList } from "./paths";
+import { isFunction, isString, isUIntNumber } from "./tools";
 
 const DEFAULT_MAX_PAYLOAD = 64 * 1024;
 const DEFAULT_PING_MS = 30_000;
@@ -61,26 +76,20 @@ export interface WSRouteDef {
 	readonly maxPayload: number;
 }
 
-// base class of the WebSocket controllers: notes the endpoints and their handlers.
-// mounted by a RouteGroup, like a Controller
-export class WSController {
-	private readonly _routes: WSRouteDef[] = [];
-	private readonly _keys = new Set<string>( );
+// base class of the WebSocket channels: notes the endpoints and their handlers.
+// mounted by a RouteGroup, like an EndPoints object
+export class Channel {
+	private readonly list = new RouteList<WSRouteDef>( );
 
 	get routes(): readonly WSRouteDef[] {
-		return this._routes;
+		return this.list.all;
 	}
 
 	// handler: { onOpen?, onMessage, onClose? }, its methods are called on that object
-	// (an object literal, or the controller itself: this.route( "/notif", this )).
-	// or only the message handler, which then runs with the controller as "this"
+	// (an object literal, or the channel itself: this.route( "/notif", this )).
+	// or only the message handler, which then runs with the channel as "this"
 	route( path: string, handler: WSHandler | WSMessageHandler, options: WSOptions = {} ) {
 		checkFixedPath( path );
-
-		const key = routeKey( "ws", path );
-		if( this._keys.has( key ) ) {
-			throw new Error( `duplicate route ${key}` );
-		}
 
 		const maxPayload = options.maxPayload ?? DEFAULT_MAX_PAYLOAD;
 		if( !isUIntNumber( maxPayload ) || maxPayload === 0 ) {
@@ -88,12 +97,11 @@ export class WSController {
 		}
 
 		const full: WSHandler = typeof handler === "function" ? { onMessage: handler.bind( this ) } : handler;
-		if( typeof full?.onMessage !== "function" ) {
+		if( !isFunction( full?.onMessage ) ) {
 			throw new Error( `ws: ${path}: onMessage is required` );
 		}
 
-		this._keys.add( key );
-		this._routes.push( Object.freeze( { path, handler: full, maxPayload } ) );
+		this.list.add( routeKey( "ws", path ), { path, handler: full, maxPayload } );
 	}
 }
 
@@ -248,7 +256,7 @@ export function createUpgradeHandler( groups: readonly RouteGroup[], options: Up
 
 	const upgrade = ( req: IncomingMessage, socket: Duplex, head: Buffer ) => {
 		const refuse = ( status: number ) => {
-			socket.end( `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n` );
+			socket.end( `HTTP/1.1 ${status} ${statusText( status )}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n` );
 		};
 
 		let url: URL;
