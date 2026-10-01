@@ -15,6 +15,10 @@
 	},
 	"esbuild": {
 		"target": "node24",
+		"alias": {
+			"iconv-lite": "@r-libre/z4js/iconv-lite",
+			"mime-db": "@r-libre/z4js/mime-db"
+		},
 		"banner": {
 			"js": "import { createRequire as __z4Require } from 'node:module'; const require = __z4Require( import.meta.url );"
 		}

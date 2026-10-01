@@ -934,6 +934,10 @@ runWorker( )
 	},
 	"esbuild": {
 		"target": "node24",
+		"alias": {
+			"iconv-lite": "@r-libre/z4js/iconv-lite",
+			"mime-db": "@r-libre/z4js/mime-db"
+		},
 		"banner": {
 			"js": "import { createRequire as __z4Require } from 'node:module'; const require = __z4Require( import.meta.url );"
 		}
@@ -942,6 +946,10 @@ runWorker( )
 ```
 
 The banner gives `require` to the CommonJS dependencies bundled in an ESM output.
+
+The alias replaces `iconv-lite` (loaded by Express through body-parser, more than 500 KB of encoding tables) by `src/iconv-lite.ts`, which decodes with the `TextDecoder` of Node: about 340 KB less in the bundle. Only difference: a JSON body in utf-32 or utf-7 gets a 415. Optional: without the alias, the real iconv-lite is bundled. Details, and how to remove it, in the header of `src/iconv-lite.ts`.
+
+The second alias replaces `mime-db` (loaded by Express through mime-types: 2522 types, 157 KB) by `src/mime-db.json`, reduced to what mime-types reads (1042 types, 54 KB), with no difference: `npm run mime-db` regenerates it and checks every extension and type against the full database. Details, and how to remove it, in the header of `scripts/mime-db.ts`.
 
 ### `tsconfig.json`
 

@@ -10,9 +10,12 @@
 	},
 	"homepage": "https://github.com/rlibre/z4js",
 	"type": "module",
+	"sideEffects": false,
 	"exports": {
 		".": "./src/index.ts",
-		"./shape": "./src/shared/shape.ts"
+		"./shape": "./src/shared/shape.ts",
+		"./iconv-lite": "./src/iconv-lite.ts",
+		"./mime-db": "./src/mime-db.json"
 	},
 	"bin": {
 		"z4js": "bin/z4js.js"
@@ -27,7 +30,8 @@
 		"build": "x4build build",
 		"prepack": "npm run build",
 		"build-publish": "deno run --allow-all ./publish.ts",
-		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit"
+		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit",
+		"mime-db": "node scripts/mime-db.ts"
 	},
 	"dependencies": {
 		"@fastify/busboy": "^3.2.2",
