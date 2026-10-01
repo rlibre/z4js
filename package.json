@@ -26,6 +26,7 @@
 	"scripts": {
 		"build": "x4build build",
 		"prepack": "npm run build",
+		"build-publish": "deno run --allow-all ./publish.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit"
 	},
 	"dependencies": {
