@@ -40,6 +40,8 @@ export type { Request, Response, Handler, Method, RouteDef, RouteInfo, RouteOpti
 export { createErrorHandler, notFoundHandler } from "./http-handlers";
 export { Worker, Workers, Progress, runWorker } from "./workers";
 export { Tasks, MAX_TASK_TEXT } from "./tasks";
+export { UploadedFile } from "./uploads";
+export type { FileSpec, FilesOptions } from "./uploads";
 export type { TaskMessage, TaskOptions, TaskPhase, TaskReport } from "./tasks";
 export type { WorkerOptions, WorkerLog, WorkersOptions, WorkerInfo } from "./workers";
 export { Mutex, LockError } from "./mutex";

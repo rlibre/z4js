@@ -12136,7 +12136,8 @@
         this.tokens = null;
       }
     }
-    // a call to the API: refresh on 401, step-up on 403 "step-up required", then once again
+    // a call to the API: refresh on 401, step-up on 403 "step-up required", then once again.
+    // a FormData body is sent as multipart (files), anything else as JSON
     async call(method, path, body) {
       try {
         return await this.send(method, path, body);
@@ -12165,11 +12166,12 @@
       };
     }
     async send(method, path, body) {
-      const headers = { "content-type": "application/json" };
+      const form = body instanceof FormData;
+      const headers = form ? {} : { "content-type": "application/json" };
       if (this.tokens) {
         headers.authorization = "Bearer " + this.tokens.access;
       }
-      const res = await fetch("http://127.0.0.1:4400" + path, { method, headers, body: body ? JSON.stringify(body) : void 0 });
+      const res = await fetch("http://127.0.0.1:4400" + path, { method, headers, body: form ? body : body ? JSON.stringify(body) : void 0 });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
         const error = Object.assign(new Error(json?.error ?? res.statusText), { status: res.status });
@@ -12229,7 +12231,12 @@
         this.refs.form = new Form({ cls: "create", content: [
           this.refs.title = new TextEdit({ label: "Titre", name: "title", type: "text", value: "" }),
           this.refs.text = new TextArea({ label: "Texte" }),
-          new Button({ label: "Ajouter la note", click: /* @__PURE__ */ __name(() => this.add(), "click") })
+          new HBox({ content: [
+            new Button({ label: "Ajouter la note", click: /* @__PURE__ */ __name(() => this.add(), "click") }),
+            new Button({ label: "Importer un fichier texte", click: /* @__PURE__ */ __name(() => this.refs.files.showDialog(), "click") })
+          ] }),
+          // the file picker of the browser, hidden: the button above opens it
+          this.refs.files = new FileDialog({ accept: ".txt,text/plain", callback: /* @__PURE__ */ __name((files) => this.importFile(files[0]), "callback") })
         ] }),
         this.refs.list = new VBox({ cls: "list" })
       ]);
@@ -12260,6 +12267,19 @@
         await server.call("POST", "/api/notes/create", { title, text });
         this.refs.title.setValue("");
         this.refs.text.setText("");
+      } catch (e) {
+        showError(e);
+      }
+    }
+    // a text file becomes a note, titled by its name: sent as multipart (field "file")
+    async importFile(file) {
+      if (!file) {
+        return;
+      }
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        await server.call("POST", "/api/notes/import", form);
       } catch (e) {
         showError(e);
       }

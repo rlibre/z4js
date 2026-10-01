@@ -2,7 +2,7 @@
 // done by a worker of the backend), refreshed live when a note changes. The recount is
 // a task of the worker: its progress is shown as it comes.
 
-import { Application, Button, Dialog, Flex, Form, HBox, Label, MessageBox, Notification, ProgressionBox, TextArea, TextEdit, VBox, asap } from "x4js";
+import { Application, Button, Dialog, FileDialog, Flex, Form, HBox, Label, MessageBox, Notification, ProgressionBox, TextArea, TextEdit, VBox, asap } from "x4js";
 import type { ComponentEvents, ComponentProps, CoreEvent, EventCallback } from "x4js";
 import { server } from "./server";
 import type { Note, TaskEvent } from "./server";
@@ -33,6 +33,7 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 		title: TextEdit,
 		text: TextArea,
 		list: VBox,
+		files: FileDialog,
 	};
 
 	// the recount task in progress and its box, null when none
@@ -60,7 +61,12 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 			this.refs.form = new Form( { cls: "create", content: [
 				this.refs.title = new TextEdit( { label: "Titre", name: "title", type: "text", value: "" } ),
 				this.refs.text = new TextArea( { label: "Texte" } ),
-				new Button( { label: "Ajouter la note", click: ( ) => this.add( ) } ),
+				new HBox( { content: [
+					new Button( { label: "Ajouter la note", click: ( ) => this.add( ) } ),
+					new Button( { label: "Importer un fichier texte", click: ( ) => this.refs.files.showDialog( ) } ),
+				] } ),
+				// the file picker of the browser, hidden: the button above opens it
+				this.refs.files = new FileDialog( { accept: ".txt,text/plain", callback: files => this.importFile( files[0] ) } ),
 			] } ),
 
 			this.refs.list = new VBox( { cls: "list" } ),
@@ -100,6 +106,23 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 			await server.call( "POST", "/api/notes/create", { title, text } );
 			this.refs.title.setValue( "" );
 			this.refs.text.setText( "" );
+		}
+		catch( e ) {
+			showError( e );
+		}
+	}
+
+	// a text file becomes a note, titled by its name: sent as multipart (field "file")
+	private async importFile( file: File ) {
+		if( !file ) {
+			return;
+		}
+
+		const form = new FormData( );
+		form.append( "file", file );
+
+		try {
+			await server.call( "POST", "/api/notes/import", form );
 		}
 		catch( e ) {
 			showError( e );

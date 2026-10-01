@@ -89,6 +89,7 @@ class Config {
   readonly tls: { cert: string, key: string }    // mandatory outside the loopback address
   readonly log: { level: LogLevel, file: string }  // file null = stdout, ${date} accepted
   readonly securityLog: { file: string }
+  readonly uploads: { folder: string }           // null = <system temp>/z4js-uploads
 
   static load<T extends Config>(cls: new () => T, file?: string): T   // file default: --config=<file>
 
@@ -141,6 +142,7 @@ class EndPoints {
   paramValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]  // /item/:id
   bodyValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]   // JSON body member
   queryValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]  // ?a=1
+  filesOf<F extends string>(req: Request, spec: Record<F, FileSpec>, options?: FilesOptions): Promise<Record<F, UploadedFile>>  // multipart
 }
 ```
 
@@ -176,6 +178,40 @@ interface ValueType {
 Conversions are tolerant (URL values are strings: `"12"` is an integer, `"yes"`/`"1"` a boolean, `?a=1` an array of one); checks are strict. `uuid` is returned lowercase. `date` accepts ISO text or a millisecond timestamp.
 
 ---
+
+### Uploads (`src/uploads.ts`)
+
+```ts
+interface FileSpec { maxBytes: number; types?: readonly string[]; required?: boolean }   // required default true
+interface FilesOptions { fields?: number /*20*/; fieldBytes?: number /*64 KB*/ }           // text fields
+
+class UploadedFile {
+  readonly id: string        // random UUID, also the name of the file on disk
+  readonly name: string      // given by the client, cleaned (no path, no control character): information only
+  readonly type: string      // given by the client: a hint only
+  readonly size: number
+  get path(): string
+  get kept(): boolean
+  keep(dest: string): Promise<void>   // moves the file (copy across disks); an existing dest is refused
+}
+```
+
+```ts
+async on_import( req: Request, res: Response ) {
+  await this.need( req, "notes/create" )                     // before reading a byte
+  const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } )
+  const comment = this.bodyValue( req, "comment", "string", { required: false } )   // text fields: req.body
+  await data.keep( join( config.data, "imports", data.id ) )   // else deleted at the end of the request
+  res.status( 201 ).json( { id: data.id } )
+}
+```
+
+- Parsed by `@fastify/busboy`, streamed to `config.uploads.folder`, mode 600, never kept whole in memory.
+- Refused: not multipart (400), undeclared file field or second file in a field (400), missing required file (400), file over `maxBytes`, too many fields or a field too long (413), type not in `types` (415).
+- A refused body is not read further: the connection is closed after the answer. A client still sending a large file may see a connection reset instead of the 413: check `file.size` before sending.
+- Every file not kept is deleted when the answer is sent or the request aborted. Call `keep` before answering.
+- `requestTimeoutMs` (30 s) applies to the whole request: raise it in the configuration for large files on slow links.
+- From the browser: `const form = new FormData( ); form.append( "data", file ); fetch( url, { method: "POST", body: form } )` (no content-type header: the browser writes it).
 
 ## `RouteGroup`
 
@@ -766,7 +802,7 @@ export class NotesEP extends EndPoints {
   }
 
   async on_create( req: Request, res: Response ) {
-    await this.need( req, "notes/write" )
+    await this.need( req, "notes/create" )
     const title = this.bodyValue( req, "title", "string", { maxlength: 100, trim: true } )
     ...
     res.status( 201 ).json( { id } )
@@ -940,12 +976,12 @@ The banner gives `require` to the CommonJS dependencies bundled in an ESM output
 
 ## Important notes for AI
 
-- Never read a request value directly (`req.body.x`, `req.params.id`, `req.query.q`): use `paramValue`, `bodyValue`, `queryValue`.
+- Never read a request value directly (`req.body.x`, `req.params.id`, `req.query.q`): use `paramValue`, `bodyValue`, `queryValue`. Files: `filesOf`, never another multipart parser.
 - Every handler of a guarded group calls `userHasAccess` or `noAccessCheck`. In debug mode, forgetting it logs `access.unchecked`.
 - Refuse with `throw new HttpError( code, "short message" )`. Never put a value, an id from the request or an internal detail in the message.
 - SQL is written with tagged templates only. Never build SQL text by concatenation.
 - `req.user` is a `SessionUser` (`id`, `login`, `grps`), a copy per request.
-- Rights are `"resource/action"` strings; `"resource/*"` and `"*"` grant more.
+- Rights are `"resource/create"`, `"resource/read"`, `"resource/update"` or `"resource/delete"`, nothing else; `"resource/*"` and `"*"` grant more. A business action (import, export, recount) takes the CRUD right it amounts to: an import creates, so `"notes/create"`.
 - `Config` fields are `readonly` and frozen. Never read `process.env` for settings: add a field.
 - A secret is never written in the config file: the key gives the path of a file holding it (`secret()`).
 - `Model.updateAll` must run after `new Access( )` and `new Sessions( )`, which register their models.

@@ -21,7 +21,8 @@
 //   - the routes of each EndPoints: this.get/post/put/patch/del( path, handler, options )
 //     and this.route( path, ... ) for the endpoints of a Channel
 //   - the values read by each handler: paramValue, bodyValue, queryValue, with their
-//     type and options, and the statuses it answers (res.status( 201 ), new HttpError( 404 ))
+//     type and options, the files of filesOf (then the body is multipart), and the
+//     statuses it answers (res.status( 201 ), new HttpError( 404 ))
 //   - the comment above the handler, as the description of the route
 //
 // Names, types and options must be literals (or constants): anything else is reported
@@ -79,8 +80,17 @@ interface Value {
 }
 
 // what a handler does: values read, statuses answered (code -> messages)
+// a file field declared to filesOf
+interface FileField {
+	name: string;
+	maxBytes: number;
+	types: string[];
+	required: boolean;
+}
+
 interface Usage {
 	values: Value[];
+	files: FileField[];
 	statuses: Map<number, Set<string>>;
 }
 
@@ -201,7 +211,7 @@ class ApiScanner {
 			this.warn( call, "handler not found: parameters unknown" );
 		}
 
-		const usage: Usage = { values: [], statuses: new Map( ) };
+		const usage: Usage = { values: [], files: [], statuses: new Map( ) };
 		if( handler ) {
 			this.scanHandler( handler, usage, new Set( ) );
 		}
@@ -237,14 +247,31 @@ class ApiScanner {
 			op.parameters = parameters;
 		}
 
+		// with files, the body is multipart: the files and the text fields side by side
 		const body = usage.values.filter( v => v.where === "body" );
-		if( body.length ) {
-			const required = body.filter( v => this.required( v ) ).map( v => v.name );
+		if( body.length || usage.files.length ) {
+			const required = [
+				...usage.files.filter( f => f.required ).map( f => f.name ),
+				...body.filter( v => this.required( v ) ).map( v => v.name ),
+			];
+
+			const properties = Object.fromEntries( [
+				...usage.files.map( f => [f.name, {
+					type: "string",
+					format: "binary",
+					description: [
+						f.maxBytes === null ? "" : `at most ${f.maxBytes} bytes`,
+						f.types.length ? `type ${f.types.join( " or " )}` : "",
+					].filter( Boolean ).join( ", " ),
+				}] ),
+				...body.map( v => [v.name, this.schemaOf( v )] ),
+			] );
+
 			op.requestBody = {
 				required: required.length > 0,
-				content: { "application/json": { schema: {
+				content: { [usage.files.length ? "multipart/form-data" : "application/json"]: { schema: {
 					type: "object",
-					properties: Object.fromEntries( body.map( v => [v.name, this.schemaOf( v )] ) ),
+					properties,
 					...( required.length ? { required } : {} ),
 				} } },
 			};
@@ -254,8 +281,14 @@ class ApiScanner {
 		const statuses = usage.statuses;
 		const success = [...statuses.keys( )].find( c => c >= 200 && c < 300 ) ?? 200;
 		addStatus( statuses, success );
-		if( usage.values.length ) {
+		if( usage.values.length || usage.files.length ) {
 			addStatus( statuses, 400 );
+		}
+		if( usage.files.length ) {
+			addStatus( statuses, 413 );
+		}
+		if( usage.files.some( f => f.types.length ) ) {
+			addStatus( statuses, 415 );
 		}
 		if( guarded ) {
 			addStatus( statuses, 401 );
@@ -330,6 +363,9 @@ class ApiScanner {
 				if( READERS[member] ) {
 					this.readValue( node, READERS[member], usage );
 				}
+				else if( member === "filesOf" ) {
+					this.readFiles( node, usage );
+				}
 				// res.status( 201 )
 				else if( this.ts.isPropertyAccessExpression( node.expression ) && node.expression.name.text === "status" ) {
 					const code = this.literal( node.arguments[0] );
@@ -355,6 +391,40 @@ class ApiScanner {
 	}
 
 	// this.bodyValue( req, "title", "string", { maxlength: 100 } )
+	// this.filesOf( req, { data: { maxBytes: 1000, types: ["text/csv"] } } )
+	private readFiles( call: TS.CallExpression, usage: Usage ) {
+		const spec = call.arguments[1];
+		if( !spec || !this.ts.isObjectLiteralExpression( spec ) ) {
+			return this.warn( call, "files are not an object literal: ignored" );
+		}
+
+		for( const prop of spec.properties ) {
+			const name = prop.name && ( this.ts.isIdentifier( prop.name ) || this.ts.isStringLiteral( prop.name ) ) ? prop.name.text : null;
+			const def = this.ts.isPropertyAssignment( prop ) ? prop.initializer : null;
+			if( !name || !def || !this.ts.isObjectLiteralExpression( def ) ) {
+				this.warn( prop, "file field is not literal: ignored" );
+				continue;
+			}
+
+			const option = ( key: string ) => {
+				const p = def.properties.find( x => x.name?.getText( ) === key );
+				return p && this.ts.isPropertyAssignment( p ) ? p.initializer : null;
+			};
+
+			const maxBytes = this.literal( option( "maxBytes" ) );
+			const typesExpr = option( "types" );
+			const types = typesExpr && this.ts.isArrayLiteralExpression( typesExpr )
+				? typesExpr.elements.map( e => this.text( e ) ).filter( t => t !== null )
+				: [];
+
+			if( typeof maxBytes !== "number" ) {
+				this.warn( prop, `maxBytes of "${name}" is not a literal` );
+			}
+
+			usage.files.push( { name, maxBytes: typeof maxBytes === "number" ? maxBytes : null, types, required: this.literal( option( "required" ) ) !== false } );
+		}
+	}
+
 	private readValue( call: TS.CallExpression, where: Value["where"], usage: Usage ) {
 		const [, nameArg, typeArg, optionsArg] = call.arguments;
 

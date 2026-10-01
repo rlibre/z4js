@@ -99,6 +99,7 @@ The configuration class is the schema of the file. Every setting of the applicat
 Refuse by default. Anything not explicitly allowed is refused.
 
 - A new resource goes in a **guarded** group unless it is meant to be public (login, health, signed webhooks).
+- Rights follow one convention: `resource/create`, `resource/read`, `resource/update`, `resource/delete`, nothing else. A business action takes the CRUD right it amounts to (an import creates: `notes/create`; an export reads: `notes/read`). Never invent an action such as `notes/import`.
 - Every handler of a guarded group calls `userHasAccess( req.user, "resource/action" )` and throws `HttpError( 403 )` when refused, or calls `noAccessCheck( req.user )` when no right is needed. In debug mode, forgetting both logs `access.unchecked`.
 - A destructive or sensitive route adds the step-up filter:
 
@@ -132,6 +133,22 @@ const order = orderShape.parse( this.bodyValue( req, "order", "object" ) );
 For an object of known shape without a `Shape`, write `as Order`.
 
 Prefer literal names, types and options: `z4js apidoc` documents them, and anything computed is invisible to it.
+
+---
+
+### Files
+
+Files arrive with the request of the action, read by `filesOf`, after the access check:
+
+```ts
+await this.need( req, "notes/create" );
+const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
+```
+
+- Declare every file field with its `maxBytes`: anything else is refused. The text fields of the form are read with `bodyValue`, as usual.
+- Never trust `file.name` nor `file.type`: the name is information only, never a path; the type is a hint. Check the content itself when it matters.
+- Keep a file with `keep( dest )`, under a name you choose (the file id), before answering; anything not kept is deleted at the end of the request.
+- Never add another upload library (multer, formidable...).
 
 ---
 

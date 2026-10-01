@@ -30,6 +30,7 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit"
 	},
 	"dependencies": {
+		"@fastify/busboy": "^3.2.2",
 		"express": "^5.1.0",
 		"postgres": "^3.4.0",
 		"ws": "^8.22.0",

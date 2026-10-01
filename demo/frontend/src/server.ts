@@ -56,8 +56,9 @@ class Server {
 		}
 	}
 
-	// a call to the API: refresh on 401, step-up on 403 "step-up required", then once again
-	async call<T = any>( method: string, path: string, body?: object ): Promise<T> {
+	// a call to the API: refresh on 401, step-up on 403 "step-up required", then once again.
+	// a FormData body is sent as multipart (files), anything else as JSON
+	async call<T = any>( method: string, path: string, body?: object | FormData ): Promise<T> {
 		try {
 			return await this.send<T>( method, path, body );
 		}
@@ -92,13 +93,15 @@ class Server {
 		};
 	}
 
-	private async send<T>( method: string, path: string, body?: object ): Promise<T> {
-		const headers: Record<string, string> = { "content-type": "application/json" };
+	private async send<T>( method: string, path: string, body?: object | FormData ): Promise<T> {
+		// multipart: the browser writes the content type, with its boundary
+		const form = body instanceof FormData;
+		const headers: Record<string, string> = form ? {} : { "content-type": "application/json" };
 		if( this.tokens ) {
 			headers.authorization = "Bearer " + this.tokens.access;
 		}
 
-		const res = await fetch( API_URL + path, { method, headers, body: body ? JSON.stringify( body ) : undefined } );
+		const res = await fetch( API_URL + path, { method, headers, body: form ? body : body ? JSON.stringify( body ) : undefined } );
 		// a body that is not JSON: no message
 		const json = await res.json( ).catch( ( ): any => null );
 

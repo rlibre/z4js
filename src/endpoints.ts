@@ -23,6 +23,8 @@
 import { Router } from "express";
 import type { Request, Response, RequestHandler } from "express";
 import { getParam } from "./params";
+import { receiveFiles } from "./uploads";
+import type { FileSpec, FilesOptions, UploadedFile } from "./uploads";
 import type { ArgType, ArgTypes, ValueType } from "./params";
 import { noAccessCheck } from "./access";
 import { checkFixedPath, checkPath, joinPath, routeKey, RouteList } from "./paths";
@@ -90,6 +92,12 @@ export class EndPoints {
 	// query string (?a=1&b=2)
 	queryValue<K extends ArgType = "string">( req: Request, name: string, type?: K, mode?: ValueType ): ArgTypes[K] {
 		return getParam( req.query, name, type ?? "string", mode );
+	}
+
+	// the files of a multipart body, by field, as declared in spec: anything else is
+	// refused. the text fields become req.body (bodyValue). see uploads.ts
+	filesOf<F extends string>( req: Request, spec: Record<F, FileSpec>, options?: FilesOptions ): Promise<Record<F, UploadedFile>> {
+		return receiveFiles( req, req.res, spec, options );
 	}
 }
 

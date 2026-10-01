@@ -37,6 +37,7 @@ import { createErrorHandler, notFoundHandler } from "./http-handlers";
 import type { Logger } from "./logger";
 import { checkFixedPath, routeKey } from "./paths";
 import { RateLimiter } from "./ratelimit";
+import { defaultUploadFolder, UPLOAD_FOLDER } from "./uploads";
 import { createUpgradeHandler } from "./ws";
 
 declare global {
@@ -93,6 +94,7 @@ export async function serve( options: ServeOptions ): Promise<RunningServer> {
 	const app = express( );
 	app.disable( "x-powered-by" );
 	app.set( "trust proxy", cfg.trustProxy );
+	app.set( UPLOAD_FOLDER, config.uploads.folder ?? defaultUploadFolder( ) );
 
 	app.use( requestLog( logger, cfg.slowRequestMs, config.debug ) );
 	app.use( securityHeaders( tls ) );

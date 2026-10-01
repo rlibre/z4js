@@ -55,7 +55,7 @@ export class NotesEP extends EndPoints {
 	}
 
 	async on_create( req: Request, res: Response ) {
-		await this.need( req, "notes/write" );
+		await this.need( req, "notes/create" );
 
 		const title = this.bodyValue( req, "title", "string", { maxlength: 100, trim: true } );
 		const text = this.bodyValue( req, "text", "string", { maxlength: 10_000 } );
@@ -162,8 +162,9 @@ No annotations, no decorators, no YAML in comments. The TypeScript compiler read
 | `postgres` | Postgres access |
 | `ws` | WebSockets (`noServer` mode, one `upgrade` listener) |
 | `x4build` | build (esbuild) |
+| `@fastify/busboy` | files sent with a request (multipart), streamed to disk |
 
-That is all. No ORM, no validation library, no logger, no session store, no JWT library. Sources are published as TypeScript, as is: what you debug is what was written.
+That is all. No ORM, no validation library, no logger, no session store, no JWT library, no upload middleware. Sources are published as TypeScript, as is: what you debug is what was written.
 
 ---
 
