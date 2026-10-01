@@ -1,10 +1,11 @@
 // The demo frontend: a login dialog, then the notes (list, add, delete, word count
-// done by a worker of the backend), refreshed live when a note changes.
+// done by a worker of the backend), refreshed live when a note changes. The recount is
+// a task of the worker: its progress is shown as it comes.
 
-import { Application, Button, Dialog, Flex, Form, HBox, Label, MessageBox, TextArea, TextEdit, VBox, asap } from "x4js";
+import { Application, Button, Dialog, Flex, Form, HBox, Label, MessageBox, Notification, ProgressionBox, TextArea, TextEdit, VBox, asap } from "x4js";
 import type { ComponentEvents, ComponentProps, CoreEvent, EventCallback } from "x4js";
 import { server } from "./server";
-import type { Note } from "./server";
+import type { Note, TaskEvent } from "./server";
 
 import "./main.scss";
 
@@ -23,7 +24,8 @@ interface NotesViewProps extends ComponentProps {
 	logout?: EventCallback<CoreEvent>;
 }
 
-// the notes of the logged user: list, add, delete, word count; reports the logout
+// the notes of the logged user: list, add, delete, word count (direct, or as a task
+// whose progress is shown); reports the logout
 class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 	declare refs: {
 		stats: Label,
@@ -32,6 +34,14 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 		text: TextArea,
 		list: VBox,
 	};
+
+	// the recount task in progress and its box, null when none
+	private task: string = null;
+	private progress: ProgressionBox = null;
+
+	// task messages received while the recount request runs: the worker may report
+	// before the answer gives the id. null when no request runs
+	private early: TaskEvent[] = null;
 
 	constructor( props: NotesViewProps ) {
 		super( props );
@@ -43,6 +53,7 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 				new Flex( ),
 				this.refs.stats = new Label( { cls: "stats" } ),
 				new Button( { label: "Compter les mots", click: ( ) => this.count( ) } ),
+				new Button( { label: "Recompter (tâche)", click: ( ) => this.recount( ) } ),
 				new Button( { label: "Déconnexion", click: ( ) => this.logout( ) } ),
 			] } ),
 
@@ -55,10 +66,13 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 			this.refs.list = new VBox( { cls: "list" } ),
 		] );
 
-		// a note was created or deleted, here or by another user
+		// a note was created or deleted, here or by another user; a task progressed
 		this.onGlobalEvent( ev => {
 			if( ev.msg.startsWith( "note." ) ) {
 				this.refresh( ).catch( showError );
+			}
+			else if( ev.msg.startsWith( "task." ) ) {
+				this.onTask( ev.params as TaskEvent );
 			}
 		} );
 
@@ -109,6 +123,58 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 		}
 		catch( e ) {
 			showError( e );
+		}
+	}
+
+	// the same count as a task of the worker: the answer gives its id, the progress
+	// comes as global messages (onTask)
+	private async recount( ) {
+		this.early = [];
+
+		try {
+			const { task } = await server.call<{ task: string }>( "POST", "/api/notes/recount" );
+			this.task = task;
+			this.progress = new ProgressionBox( "Comptage des mots" );
+			this.progress.show( );
+		}
+		catch( e ) {
+			showError( e );
+		}
+
+		const early = this.early;
+		this.early = null;
+		early.forEach( e => this.onTask( e ) );
+	}
+
+	// our recount moves its box; the end of another task (the backup of the server,
+	// a recount started elsewhere) is a notification
+	private onTask( e: TaskEvent ) {
+		if( this.early ) {
+			this.early.push( e );
+			return;
+		}
+
+		if( e.task !== this.task ) {
+			if( e.phase === "end" ) {
+				new Notification( { title: "Tâche terminée", text: e.text ?? "", mode: e.ok ? "success" : "danger" } ).display( 4 );
+			}
+			return;
+		}
+
+		if( e.phase === "step" ) {
+			this.progress.setText( e.text ?? "", e.percent ?? 0 );
+		}
+		else if( e.phase === "end" ) {
+			if( e.ok ) {
+				this.progress.setText( e.text ?? "", 100 );
+			}
+			else {
+				this.progress.addError( e.text ?? "échec", 100 );
+			}
+
+			this.progress.done( );
+			this.task = null;
+			this.progress = null;
 		}
 	}
 
@@ -178,7 +244,7 @@ class App extends Application {
 			logout: ( ) => this.showLogin( ),
 		} ) );
 
-		server.openLive( ).catch( showError );
+		server.openSockets( ).catch( showError );
 	}
 }
 

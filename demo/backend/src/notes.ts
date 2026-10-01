@@ -5,11 +5,13 @@
 //   POST   /api/notes/create       notes/write    { title, text }
 //   DELETE /api/notes/item/:id     notes/delete   + step-up (identity confirmed recently)
 //   GET    /api/notes/stats        notes/read     words counted by the "stats" worker
+//   POST   /api/notes/recount      notes/read     the same, slowly, as a task: 202 { task },
+//                                                 its progress comes on /api/tasks
 //   GET    /api/me                 any user
 
 import { randomUUID } from "node:crypto";
 import { EndPoints, HttpError, noAccessCheck } from "@r-libre/z4js";
-import type { Access, Request, Response, Sessions, SqliteSql, Workers } from "@r-libre/z4js";
+import type { Access, Request, Response, Sessions, SqliteSql, Tasks, Workers } from "@r-libre/z4js";
 import type { LiveChannel } from "./live";
 
 interface Deps {
@@ -18,6 +20,7 @@ interface Deps {
 	sessions: Sessions;
 	live: LiveChannel;
 	workers: Workers;
+	tasks: Tasks;
 }
 
 // the routes of the notes (see the header)
@@ -30,6 +33,7 @@ export class NotesEP extends EndPoints {
 		this.post( "/create", this.on_create );
 		this.del( "/item/:id", this.on_delete, { filter: deps.sessions.stepUp } );
 		this.get( "/stats", this.on_stats );
+		this.post( "/recount", this.on_recount );
 	}
 
 	async on_all( req: Request, res: Response ) {
@@ -80,6 +84,17 @@ export class NotesEP extends EndPoints {
 
 		const rows = await this.deps.sql`select text from notes`;
 		res.json( await this.deps.workers.call( "stats", "count", { texts: rows.map( r => r.text ) } ) );
+	}
+
+	// the worker reports the progress of the task: the answer gives its id at once
+	async on_recount( req: Request, res: Response ) {
+		await this.need( req, "notes/read" );
+
+		const rows = await this.deps.sql`select text from notes`;
+		const task = this.deps.tasks.create( req.user );
+		this.deps.workers.post( "stats", "recount", { task, texts: rows.map( r => r.text ) } );
+
+		res.status( 202 ).json( { task } );
 	}
 
 	private async need( req: Request, right: string ) {

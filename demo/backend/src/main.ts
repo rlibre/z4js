@@ -1,7 +1,7 @@
 // Entry point of the demo: configuration, database, sessions, routes, workers, server.
 
 import { join } from "node:path";
-import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "@r-libre/z4js";
+import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Tasks, Workers, serve, sqlite } from "@r-libre/z4js";
 import { DemoConfig } from "./config";
 import { LiveChannel } from "./live";
 import { seed } from "./models";
@@ -33,7 +33,10 @@ await Model.validateAll( sql );
 await seed( sql );
 
 // the worker entry file is dist/workers.js, next to this one
-const workers = new Workers( { config, logger } );
+// the progress of the long tasks of the workers, followed by the clients on /api/tasks
+const tasks = new Tasks( );
+
+const workers = new Workers( { config, logger, tasks } );
 await workers.start( "stats" );
 await workers.start( "backup" );
 
@@ -41,9 +44,10 @@ const live = new LiveChannel( );
 
 // every route of /api needs a session; /auth is open (login, refresh, logout, stepup)
 const api = RouteGroup.guarded( "/api", sessions.guard )
-	.add( "/notes", new NotesEP( { sql, access, sessions, live, workers } ) )
+	.add( "/notes", new NotesEP( { sql, access, sessions, live, workers, tasks } ) )
 	.add( "/me", new MeEP( ) )
-	.add( "/live", live );
+	.add( "/live", live )
+	.add( "/tasks", tasks );
 
 const auth = RouteGroup.unprotected( "/auth" )
 	.add( "/", sessions.endPoints );

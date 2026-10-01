@@ -54,6 +54,7 @@ Access                      users, groups, rights: userHasAccess
 Sessions                    tokens, guard, /login /refresh /logout /stepup, step-up filter
 RateLimiter                 fixed window counter per key, route filter
 Worker / Workers            background threads (worker side / main side)
+Tasks / Progress            progress of the long tasks of the workers, sent to the clients by WebSocket
 Mutex                       named lock shared by every thread
 Logger / SecurityLog        line + JSON logs; closed list of security events
 HttpError                   an error that answers with its status and a short message
@@ -461,8 +462,17 @@ abstract class Worker {
   onStop(): unknown                                 // after the end of onRun
   get signal(): AbortSignal                         // fired as soon as the stop is asked
   wait(ms: number): Promise<boolean>                // true after ms, false at once on stop
+  progress(task: string | { broadcast: true }): Progress   // see Tasks
 }
 interface WorkerOptions { multiple?: boolean }
+
+class Progress {                  // one task, seen from the worker: "start" sent at its creation
+  readonly id: string
+  get isEnded(): boolean
+  step(text: string, percent?: number): void      // plain text, percent 0..100 or absent
+  done(text?: string): void
+  fail(text: string): void
+}
 function runWorker(): Promise<void>     // last line of the entry file
 ```
 
@@ -470,7 +480,7 @@ Main side:
 
 ```ts
 class Workers {
-  constructor(options: WorkersOptions)                 // { config, logger, file? }
+  constructor(options: WorkersOptions)                 // { config, logger, file?, tasks? }
   start(name: string, instances?: number): Promise<void>
   post(name: string, type: string, data?: unknown): void          // one instance, in turn
   broadcast(name: string, type: string, data?: unknown): void     // every instance
@@ -498,6 +508,51 @@ class Backup extends Worker {
 ```
 
 A crashed worker is not restarted: logged, removed, its calls fail, its mutexes are released. Each thread is named `name#instance` in the debugger.
+
+---
+
+## `Tasks` (`src/tasks.ts`)
+
+The progress of a long task of a worker, followed by the client through a WebSocket. The main thread creates the task (the client gets its id in the answer), the worker reports on it.
+
+```ts
+class Tasks extends Channel {                     // mount it: api.add( "/tasks", tasks )
+  create(user: string | { id: string }, options?: TaskOptions): string   // the task id
+  report(r: TaskReport, worker: string): string   // called by Workers: null, or why it is refused
+  workerEnded(worker: string): void               // called by Workers: its tasks fail
+}
+interface TaskOptions { broadcast?: boolean }     // every connected user, not only the one who created it
+interface TaskMessage { task: string; phase: "start" | "step" | "end"; text?: string; percent?: number; ok?: boolean }
+const MAX_TASK_TEXT = 256
+```
+
+```ts
+// main
+const tasks = new Tasks( )
+const workers = new Workers( { config, logger, tasks } )
+const api = RouteGroup.guarded( "/api", sessions.guard ).add( "/tasks", tasks )
+
+// handler
+const task = tasks.create( req.user )
+workers.post( "import", "run", { task, file } )
+res.status( 202 ).json( { task } )
+
+// worker
+const progress = this.progress( data.task )       // "start"
+progress.step( "line 300 / 1200", 25 )
+progress.done( "1200 lines" )                     // or progress.fail( "bad file" )
+
+// a task nobody asked for (scheduled job): created by the worker, always broadcast
+const progress = this.progress( { broadcast: true } )
+```
+
+- The client opens the socket like any channel (ticket by `POST /api/tasks`, then `?ticket=`) and receives `TaskMessage`s. The text is plain text, never HTML.
+- A task is followed by its creator only, unless `broadcast`. A socket without user (unprotected group) is closed.
+- A worker reports only on a task created by the main thread, except a broadcast task it creates itself. Another worker may not report on a started task. Refusals are logged (`worker.task.refused`).
+- A progress left open when `onMessage` (or `onRun`) ends is closed: `done` if it succeeded, `fail( "failed" )` if it threw. A worker that dies fails its tasks (`"worker ended"`).
+- A socket opened while a task runs receives its current state: `start`, then the last `step`.
+- 1000 tasks at most at the same time (`create` answers 503 above). The text of a step is cut to `MAX_TASK_TEXT`, the percent bounded to 0..100.
+- A worker processes its messages one at a time: a long task in `onMessage` delays the next messages of that worker.
 
 ---
 

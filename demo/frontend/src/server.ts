@@ -1,7 +1,8 @@
 // Access to the z4js backend: the session tokens (memory only, a reload
 // logs out), a refresh on 401, the password asked again when a route needs a step-up,
-// and the live events, fired as global messages ("note.created", "note.deleted"):
-// the views do not know they come through a WebSocket.
+// the live events and the progress of the tasks, fired as global messages
+// ("note.created", "note.deleted", "task.start", "task.step", "task.end"): the views
+// do not know they come through a WebSocket.
 
 import { Application, InputBox } from "x4js";
 
@@ -21,6 +22,15 @@ export interface LiveEvent {
 	id: string;
 	title?: string;
 	author?: string;
+}
+
+// a message of /api/tasks: the progress of a task of a worker
+export interface TaskEvent {
+	task: string;
+	phase: "start" | "step" | "end";
+	text?: string;
+	percent?: number;
+	ok?: boolean;
 }
 
 // an error answer: the HTTP status and the short message of the backend
@@ -64,14 +74,21 @@ class Server {
 		}
 	}
 
-	// live events: a one-time ticket (POST on the endpoint path), then the socket within 1 s
-	async openLive( ) {
-		const { ticket } = await this.call<{ ticket: string }>( "POST", "/api/live/notes" );
-		const ws = new WebSocket( `${API_URL.replace( /^http/, "ws" )}/api/live/notes?ticket=${encodeURIComponent( ticket )}` );
+	// the live events of the notes and the progress of the tasks
+	async openSockets( ) {
+		await this.openSocket<LiveEvent>( "/api/live/notes", e => `note.${e.event}` );
+		await this.openSocket<TaskEvent>( "/api/tasks", e => `task.${e.phase}` );
+	}
+
+	// a one-time ticket (POST on the endpoint path), then the socket within 1 s. each
+	// message is fired as a global message, named by nameOf
+	private async openSocket<E>( path: string, nameOf: ( event: E ) => string ) {
+		const { ticket } = await this.call<{ ticket: string }>( "POST", path );
+		const ws = new WebSocket( `${API_URL.replace( /^http/, "ws" )}${path}?ticket=${encodeURIComponent( ticket )}` );
 
 		ws.onmessage = e => {
-			const event: LiveEvent = JSON.parse( e.data );
-			Application.fireGlobal( `note.${event.event}`, event );
+			const event: E = JSON.parse( e.data );
+			Application.fireGlobal( nameOf( event ), event );
 		};
 	}
 

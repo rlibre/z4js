@@ -130,7 +130,7 @@ await workers.start( "stats" );
 const result = await workers.call( "stats", "count", { texts } );
 ```
 
-Workers are classes registered by name in a single entry file. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
+Workers are classes registered by name in a single entry file. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. A long task reports its progress (`progress.step( "line 300 / 1200", 25 )`), which the user who started it follows live through a WebSocket, or everybody for a broadcast task. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
 
 ---
 

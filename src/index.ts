@@ -38,7 +38,9 @@ export { Channel, WSocket, WSData, WSDataError, createUpgradeHandler } from "./w
 export type { WSHandler, WSMessageHandler, WSOptions, WSRouteDef, UpgradeOptions, UpgradeHandler } from "./ws";
 export type { Request, Response, Handler, Method, RouteDef, RouteInfo, RouteOptions } from "./endpoints";
 export { createErrorHandler, notFoundHandler } from "./http-handlers";
-export { Worker, Workers, runWorker } from "./workers";
+export { Worker, Workers, Progress, runWorker } from "./workers";
+export { Tasks, MAX_TASK_TEXT } from "./tasks";
+export type { TaskMessage, TaskOptions, TaskPhase, TaskReport } from "./tasks";
 export type { WorkerOptions, WorkerLog, WorkersOptions, WorkerInfo } from "./workers";
 export { Mutex, LockError } from "./mutex";
 export { serve } from "./server";

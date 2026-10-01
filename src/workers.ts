@@ -60,6 +60,8 @@
 // worker stopped on a breakpoint must not be taken for a dead one: the calls have no
 // timeout, and the stop waits for the workers instead of terminating them.
 
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Worker as NodeWorker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import type { Config } from "./config";
@@ -67,6 +69,7 @@ import { LOG_LEVELS } from "./logger";
 import type { Logger, LogLevel } from "./logger";
 import { closeMutexes, mutexBuffers, releaseThread } from "./mutex";
 import type { MutexBuffers } from "./mutex";
+import type { TaskReport, Tasks } from "./tasks";
 import { deepFreeze, isString } from "./tools";
 
 const DEFAULT_CALL_MS = 30_000;
@@ -74,6 +77,9 @@ const DEFAULT_CALL_MS = 30_000;
 // fired when the worker stops. one per thread, and a thread runs one worker only: the
 // module is loaded again by each thread, so this is the state of the worker of the thread
 const stopper = isMainThread ? null : new AbortController( );
+
+// the tasks opened by the onMessage or onRun in progress (see tracked)
+const scope = isMainThread ? null : new AsyncLocalStorage<Set<Progress>>( );
 
 // messages between the threads
 type ToWorker =
@@ -86,6 +92,7 @@ type ToMain =
 	| { k: "post", type: string, data: unknown }
 	| { k: "reply", id: number, ok: boolean, value?: unknown, error?: string }
 	| { k: "log", level: LogLevel, event: string, data?: Record<string, unknown> }
+	| { k: "task", report: TaskReport }
 	| { k: "stopped" };
 
 interface StartData {
@@ -149,6 +156,13 @@ export abstract class Worker {
 		send( { k: "post", type, data } );
 	}
 
+	// the progress of a task created by the main thread (tasks.create, its id comes with
+	// the message), or of a new broadcast task created here ({ broadcast: true }: a
+	// scheduled job nobody asked for). sends "start" at once
+	progress( task: string | { broadcast: true } ): Progress {
+		return isString( task ) ? new Progress( task, false ) : new Progress( randomUUID( ), true );
+	}
+
 	// called once, before any message
 	onStart( ): unknown {
 		return undefined;
@@ -200,6 +214,65 @@ function send( message: ToMain ) {
 	parentPort.postMessage( message );
 }
 
+// the progress of one task, seen from the worker (see tasks.ts): "start" at its
+// creation, then the steps, then done or fail. nothing is sent once it ended
+export class Progress {
+	private ended = false;
+	private readonly owner: Set<Progress>;
+
+	// made by worker.progress( )
+	constructor( readonly id: string, broadcast: boolean ) {
+		this.owner = scope.getStore( ) ?? null;
+		this.owner?.add( this );
+		send( { k: "task", report: { id, phase: "start", ...( broadcast ? { broadcast } : {} ) } } );
+	}
+
+	get isEnded( ): boolean {
+		return this.ended;
+	}
+
+	// text shown by the client (plain text), percent from 0 to 100, absent if unknown
+	step( text: string, percent?: number ) {
+		if( !this.ended ) {
+			send( { k: "task", report: { id: this.id, phase: "step", text, percent } } );
+		}
+	}
+
+	done( text?: string ) {
+		this.end( true, text );
+	}
+
+	fail( text: string ) {
+		this.end( false, text );
+	}
+
+	private end( ok: boolean, text: string ) {
+		if( this.ended ) {
+			return;
+		}
+
+		this.ended = true;
+		this.owner?.delete( this );
+		send( { k: "task", report: { id: this.id, phase: "end", ok, text } } );
+	}
+}
+
+// runs onMessage or onRun, then ends the tasks it left open: done if it succeeded, fail
+// if it threw. a forgotten done must not leave a progress bar running forever
+async function tracked( fn: ( ) => unknown ): Promise<unknown> {
+	const open = new Set<Progress>( );
+
+	try {
+		const result = await scope.run( open, fn );
+		[...open].forEach( p => p.done( ) );
+		return result;
+	}
+	catch( e ) {
+		[...open].forEach( p => p.fail( "failed" ) );
+		throw e;
+	}
+}
+
 // to call at the end of the entry file: instantiates the worker named in workerData
 export async function runWorker( ): Promise<void> {
 	if( isMainThread ) {
@@ -243,7 +316,7 @@ export async function runWorker( ): Promise<void> {
 
 async function runLoop( worker: Worker ): Promise<void> {
 	try {
-		await worker.onRun( );
+		await tracked( ( ) => worker.onRun( ) );
 	}
 	catch( e ) {
 		worker.log.error( "worker.run.failed", { worker: worker.name, error: e } );
@@ -267,7 +340,7 @@ async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<vo
 	switch( message.k ) {
 		case "post":
 			try {
-				await worker.onMessage( message.type, message.data );
+				await tracked( ( ) => worker.onMessage( message.type, message.data ) );
 			}
 			catch( e ) {
 				worker.log.error( "worker.message.failed", { worker: worker.name, type: message.type, error: e } );
@@ -276,7 +349,8 @@ async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<vo
 
 		case "call":
 			try {
-				send( { k: "reply", id: message.id, ok: true, value: await worker.onMessage( message.type, message.data ) } );
+				const value = await tracked( ( ) => worker.onMessage( message.type, message.data ) );
+				send( { k: "reply", id: message.id, ok: true, value } );
 			}
 			catch( e ) {
 				send( { k: "reply", id: message.id, ok: false, error: e instanceof Error ? e.message : String( e ) } );
@@ -298,11 +372,18 @@ async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<vo
 
 // -- main side ------------------------------------------------------------------------
 
+// "name#instance": the name of the thread in the debugger, and the owner of its tasks
+function threadName( w: { name: string, instance: number } ): string {
+	return `${w.name}#${w.instance}`;
+}
+
 export interface WorkersOptions {
 	config: Config;
 	logger: Logger;
 	// the entry file of the workers, default: workers.js next to the main script
 	file?: string;
+	// receives the progress of the tasks reported by the workers (tasks.ts)
+	tasks?: Tasks;
 }
 
 export interface WorkerInfo {
@@ -418,7 +499,7 @@ export class Workers {
 		const { config, logger } = this.options;
 		const start: StartData = { name, instance, instances, config, mutexes: mutexBuffers( ) };
 		// the name shown by the debugger, and in worker_threads.threadName
-		const thread = new NodeWorker( this.file, { workerData: start, name: `${name}#${instance}` } );
+		const thread = new NodeWorker( this.file, { workerData: start, name: threadName( { name, instance } ) } );
 
 		const w: Running = {
 			info: { name, instance, threadId: thread.threadId, started: new Date( ), state: "starting" },
@@ -445,6 +526,9 @@ export class Workers {
 					clearTimeout( call.timer );
 					call.reject( new Error( `worker "${name}" ended` ) );
 				}
+
+				// its running tasks fail
+				this.options.tasks?.workerEnded( threadName( w.info ) );
 
 				const released = releaseThread( w.info.threadId );
 				if( released.length ) {
@@ -498,8 +582,29 @@ export class Workers {
 				}
 				break;
 
+			case "task":
+				this.task( w, message.report );
+				break;
+
 			case "stopped":
 				break;
+		}
+	}
+
+	// a progress report: passed to the Tasks, refused if it is not theirs
+	private task( w: Running, report: TaskReport ) {
+		const { logger, tasks } = this.options;
+		let refused = "no Tasks given to Workers";
+
+		try {
+			refused = tasks ? tasks.report( report, threadName( w.info ) ) : refused;
+		}
+		catch {
+			refused = "too many tasks";
+		}
+
+		if( refused ) {
+			logger.warn( "worker.task.refused", { worker: w.info.name, instance: w.info.instance, reason: refused } );
 		}
 	}
 

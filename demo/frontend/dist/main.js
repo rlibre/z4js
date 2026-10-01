@@ -58,37 +58,6 @@
     }
   });
 
-  // x4-internal:copy-state
-  var copy_state_default = "C:\\dev\\rlibre\\y4-2026\\demo\\frontend\\public\\index.html\x00269\x001790864304170.199";
-
-  // node_modules/x4js/cli/dev-client.js
-  var events = new EventSource("/esbuild");
-  Object.defineProperty(events, "__x4CopyState", { value: copy_state_default });
-  events.addEventListener("change", (event) => {
-    const change = JSON.parse(event.data);
-    const changed = [...change.added, ...change.removed, ...change.updated];
-    if (change.added.length === 0 && change.removed.length === 0 && change.updated.length > 0 && change.updated.every((file) => file.endsWith(".css"))) {
-      const pending = new Set(change.updated);
-      const links = document.querySelectorAll('link[rel="stylesheet"]');
-      for (const link of links) {
-        const current2 = new URL(link.href);
-        if (!pending.has(current2.pathname))
-          continue;
-        const next = link.cloneNode();
-        const url = new URL(link.href);
-        url.searchParams.set("x4", Date.now().toString());
-        next.href = url.href;
-        next.onload = () => link.remove();
-        link.after(next);
-        pending.delete(current2.pathname);
-      }
-      if (pending.size === 0)
-        return;
-    }
-    if (changed.length)
-      location.reload();
-  });
-
   // node_modules/x4js/src/core/core_i18n.ts
   var languages = {};
   function createLanguage(name, base) {
@@ -855,7 +824,7 @@
     }
   };
   __name(_EventSource, "EventSource");
-  var EventSource2 = _EventSource;
+  var EventSource = _EventSource;
 
   // node_modules/x4js/src/core/core_element.ts
   var _events, _timers, _cleanup;
@@ -1022,7 +991,7 @@
     on(name, listener) {
       console.assert(listener !== void 0 && listener !== null);
       if (!__privateGet(this, _events)) {
-        __privateSet(this, _events, new EventSource2(this));
+        __privateSet(this, _events, new EventSource(this));
       }
       __privateGet(this, _events).addListener(name, listener);
       return {
@@ -1532,7 +1501,7 @@
     return c === "." || c === "[";
   }
   __name(_path_matches, "_path_matches");
-  var _StateManager = class _StateManager extends EventSource2 {
+  var _StateManager = class _StateManager extends EventSource {
     constructor(initialState) {
       super();
       __publicField(this, "_state");
@@ -1930,9 +1899,9 @@
         * Sets multiple DOM event listeners on the component's DOM element.
         * @param events - An object where keys are event names and values are their corresponding handler functions.
         */
-    setDOMEvents(events2) {
-      for (const name in events2) {
-        this.addDOMEvent(name, events2[name]);
+    setDOMEvents(events) {
+      for (const name in events) {
+        this.addDOMEvent(name, events[name]);
       }
     }
     // :: HILEVEL EVENTS ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -12180,13 +12149,19 @@
         return this.send(method, path, body);
       }
     }
-    // live events: a one-time ticket (POST on the endpoint path), then the socket within 1 s
-    async openLive() {
-      const { ticket } = await this.call("POST", "/api/live/notes");
-      const ws = new WebSocket(`${"http://127.0.0.1:4400".replace(/^http/, "ws")}/api/live/notes?ticket=${encodeURIComponent(ticket)}`);
+    // the live events of the notes and the progress of the tasks
+    async openSockets() {
+      await this.openSocket("/api/live/notes", (e) => `note.${e.event}`);
+      await this.openSocket("/api/tasks", (e) => `task.${e.phase}`);
+    }
+    // a one-time ticket (POST on the endpoint path), then the socket within 1 s. each
+    // message is fired as a global message, named by nameOf
+    async openSocket(path, nameOf) {
+      const { ticket } = await this.call("POST", path);
+      const ws = new WebSocket(`${"http://127.0.0.1:4400".replace(/^http/, "ws")}${path}?ticket=${encodeURIComponent(ticket)}`);
       ws.onmessage = (e) => {
         const event = JSON.parse(e.data);
-        Application.fireGlobal(`note.${event.event}`, event);
+        Application.fireGlobal(nameOf(event), event);
       };
     }
     async send(method, path, body) {
@@ -12235,6 +12210,12 @@
   var _NotesView = class _NotesView extends VBox {
     constructor(props) {
       super(props);
+      // the recount task in progress and its box, null when none
+      __publicField(this, "task", null);
+      __publicField(this, "progress", null);
+      // task messages received while the recount request runs: the worker may report
+      // before the answer gives the id. null when no request runs
+      __publicField(this, "early", null);
       this.mapPropEvents(props, "logout");
       this.setContent([
         new HBox({ cls: "toolbar", content: [
@@ -12242,6 +12223,7 @@
           new Flex(),
           this.refs.stats = new Label({ cls: "stats" }),
           new Button({ label: "Compter les mots", click: /* @__PURE__ */ __name(() => this.count(), "click") }),
+          new Button({ label: "Recompter (tâche)", click: /* @__PURE__ */ __name(() => this.recount(), "click") }),
           new Button({ label: "Déconnexion", click: /* @__PURE__ */ __name(() => this.logout(), "click") })
         ] }),
         this.refs.form = new Form({ cls: "create", content: [
@@ -12254,6 +12236,8 @@
       this.onGlobalEvent((ev) => {
         if (ev.msg.startsWith("note.")) {
           this.refresh().catch(showError);
+        } else if (ev.msg.startsWith("task.")) {
+          this.onTask(ev.params);
         }
       });
       this.refresh().catch(showError);
@@ -12294,6 +12278,48 @@
         this.refs.stats.setText(`${r.notes} notes, ${r.words} mots (worker ${r.by})`);
       } catch (e) {
         showError(e);
+      }
+    }
+    // the same count as a task of the worker: the answer gives its id, the progress
+    // comes as global messages (onTask)
+    async recount() {
+      this.early = [];
+      try {
+        const { task } = await server.call("POST", "/api/notes/recount");
+        this.task = task;
+        this.progress = new ProgressionBox("Comptage des mots");
+        this.progress.show();
+      } catch (e) {
+        showError(e);
+      }
+      const early = this.early;
+      this.early = null;
+      early.forEach((e) => this.onTask(e));
+    }
+    // our recount moves its box; the end of another task (the backup of the server,
+    // a recount started elsewhere) is a notification
+    onTask(e) {
+      if (this.early) {
+        this.early.push(e);
+        return;
+      }
+      if (e.task !== this.task) {
+        if (e.phase === "end") {
+          new Notification({ title: "Tâche terminée", text: e.text ?? "", mode: e.ok ? "success" : "danger" }).display(4);
+        }
+        return;
+      }
+      if (e.phase === "step") {
+        this.progress.setText(e.text ?? "", e.percent ?? 0);
+      } else if (e.phase === "end") {
+        if (e.ok) {
+          this.progress.setText(e.text ?? "", 100);
+        } else {
+          this.progress.addError(e.text ?? "échec", 100);
+        }
+        this.progress.done();
+        this.task = null;
+        this.progress = null;
       }
     }
     async logout() {
@@ -12348,7 +12374,7 @@
         login,
         logout: /* @__PURE__ */ __name(() => this.showLogin(), "logout")
       }));
-      server.openLive().catch(showError);
+      server.openSockets().catch(showError);
     }
   };
   __name(_App, "App");

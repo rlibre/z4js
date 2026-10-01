@@ -262,6 +262,8 @@ Use a worker for CPU-heavy or long work that must not block the requests.
 - `onMessage( type, data )` returns the answer of a `call`.
 - A worker that runs until its stop (periodic task, polling) puts its loop in `onRun`, paced by `while( await this.wait( ms ) )`. Never loop in `onStart`: `workers.start` would never return. Pass `this.signal` to anything that can be aborted (`fetch`...).
 - A worker opens its own database connection (in `onStart`, closed in `onStop`): a connection cannot cross threads.
+- A long task the user waits for reports its progress: the handler creates the task (`tasks.create( req.user )`), posts it to the worker and answers `202 { task }`; the worker calls `this.progress( data.task )`, then `step( text, percent? )` and `done( )` or `fail( text )`. Never send progress through `workers.on` or a channel of your own.
+- Await the work inside `onMessage`: a progress still open when it returns is closed as done.
 - A worker logs with `this.log`; the main thread writes the lines.
 - Use `workers.call` when the request waits for the result, `workers.post` when it does not.
 - Pass `onStop: ( ) => workers.stop( )` to `serve` so the workers stop after the requests.

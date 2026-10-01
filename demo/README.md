@@ -15,7 +15,8 @@ Une petite application de notes : un backend z4js et un frontend x4js.
 - Suppression d'une note protégée par un step-up : le mot de passe est redemandé.
 - Notifications en direct (WebSocket avec ticket) quand une note est créée ou supprimée.
 - Comptage des mots fait par un worker (`stats`), avec un mutex partagé.
-- Sauvegarde périodique de la base par un worker qui tourne jusqu'à l'arrêt (`backup`, `onRun`) : `data/backup/demo.db`, toutes les `backupMinutes` (1 par défaut).
+- Sauvegarde périodique de la base par un worker qui tourne jusqu'à l'arrêt (`backup`, `onRun`) : `data/backup/demo.db`, toutes les `backupMinutes` (1 par défaut). C'est une tâche broadcast : chaque utilisateur connecté voit une notification à sa fin.
+- Progression d'une tâche longue : « Recompter (tâche) » appelle `POST /api/notes/recount` (`202 { task }`), le worker `stats` compte note par note et rapporte sa progression, affichée dans un `ProgressionBox` (socket `/api/tasks`).
 
 ## Installation
 
