@@ -43,7 +43,7 @@ export { Tasks, MAX_TASK_TEXT } from "./tasks";
 export { UploadedFile } from "./uploads";
 export type { FileSpec, FilesOptions } from "./uploads";
 export type { TaskMessage, TaskOptions, TaskPhase, TaskReport } from "./tasks";
-export type { WorkerOptions, WorkerLog, WorkersOptions, WorkerInfo } from "./workers";
+export type { WorkerOptions, WorkerLog, WorkerMessage, WorkersOptions, WorkerInfo } from "./workers";
 export { Mutex, LockError } from "./mutex";
 export { serve } from "./server";
 export type { ServeOptions, RunningServer, StaticFolder } from "./server";

@@ -166,6 +166,28 @@ class Backup extends Worker {
 
 The stop interrupts the wait, lets the current round end, then calls `onStop`. A loop that dies is logged and ends the worker: it never fails in silence.
 
+A worker with heavy work to do stays reachable by reading its messages itself, between two pieces of work, instead of receiving them in `onMessage`:
+
+```ts
+async onRun( ) {
+	let msg: WorkerMessage;
+
+	while( !this.signal.aborted ) {
+		if( msg = this.peekMessage( ) ) {
+			this.dispatch( msg );                   // msg.reply( value ) answers a call
+		}
+		else if( this.files.length ) {
+			indexFile( this.files.shift( ) );       // heavy, synchronous
+		}
+		else {
+			await this.waitMessage( );              // nothing to do: sleeps until a message or the stop
+		}
+	}
+}
+```
+
+`peekMessage` never waits and works in a loop that never awaits; `getMessage` waits for the next message and returns `null` when the worker stops. A call left without answer is rejected at once, not after its timeout.
+
 A worker bundles only what it uses: the package declares no side effect at import, so the bundler leaves Express and WebSockets out of `workers.js` (29 KB in the demo, instead of 684 KB).
 
 ---

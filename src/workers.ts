@@ -27,6 +27,16 @@
 //           while( await this.wait( 3_600_000 ) ) { ... }      // false as soon as the worker stops
 //       }
 //   }
+//   class Indexer extends Worker {                             // no onMessage: reads its messages itself
+//       async onRun( ) {
+//           let msg: WorkerMessage;
+//           while( !this.signal.aborted ) {
+//               if( msg = this.peekMessage( ) ) { ... }        // never waits. msg.reply( value ) answers a call
+//               else if( this.files.length ) { ... }           // a piece of work
+//               else { await this.waitMessage( ); }            // nothing to do: until a message or the stop
+//           }
+//       }
+//   }
 //   Worker.register( "mailer", Mailer );
 //   Worker.register( "render", Render, { multiple: true } );   // several instances allowed
 //   runWorker( );
@@ -48,6 +58,12 @@
 // false), waits for the end of onRun, then runs onStop. An error that ends onRun stops
 // the worker: like a crash, it is logged and not restarted.
 //
+// A worker without onMessage reads its messages in onRun, when it chooses to: peekMessage
+// (at once, null if there is none), waitMessage (until one is there), getMessage (the
+// next one, waited for, null at the stop). peekMessage reads the port itself, so a loop
+// that never awaits still receives its messages, and its stop. The messages not read yet
+// wait in a queue of MAX_INBOX: above, a call is rejected and a post is logged and lost.
+//
 // A worker receives the loaded configuration (frozen again on its side) and the
 // shared mutexes (mutex.ts). Its log lines go to the main thread, which writes them:
 // two threads writing the same file could mix their lines. A crashed worker is not
@@ -63,7 +79,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { Worker as NodeWorker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { Worker as NodeWorker, isMainThread, parentPort, receiveMessageOnPort, workerData } from "node:worker_threads";
 import type { Config } from "./config";
 import { LOG_LEVELS } from "./logger";
 import type { Logger, LogLevel } from "./logger";
@@ -73,10 +89,15 @@ import type { TaskReport, Tasks } from "./tasks";
 import { deepFreeze, isString } from "./tools";
 
 const DEFAULT_CALL_MS = 30_000;
+const MAX_INBOX = 100;
 
 // fired when the worker stops. one per thread, and a thread runs one worker only: the
 // module is loaded again by each thread, so this is the state of the worker of the thread
 const stopper = isMainThread ? null : new AbortController( );
+
+// the messages of the worker of the thread, when it reads them itself. set by runWorker,
+// null for a worker that has an onMessage
+let inbox: Inbox = null;
 
 // the tasks opened by the onMessage or onRun in progress (see tracked)
 const scope = isMainThread ? null : new AsyncLocalStorage<Set<Progress>>( );
@@ -86,6 +107,8 @@ type ToWorker =
 	| { k: "post", type: string, data: unknown }
 	| { k: "call", id: number, type: string, data: unknown }
 	| { k: "stop" };
+
+type Incoming = Exclude<ToWorker, { k: "stop" }>;
 
 type ToMain =
 	| { k: "ready" }
@@ -112,6 +135,15 @@ export interface WorkerOptions {
 
 // the log of a worker: same methods as Logger, lines written by the main thread
 export type WorkerLog = Pick<Logger, LogLevel>;
+
+// a post or a call from the main thread, read by peekMessage or getMessage
+export interface WorkerMessage {
+	type: string;
+	data: unknown;
+	// answers a call, nothing for a post. to do before the next message is read: a call
+	// left without answer is rejected then
+	reply( value?: unknown ): void;
+}
 
 // base class of the workers: the code that runs in a thread of its own, receives
 // messages from the main thread and answers or posts back
@@ -174,8 +206,9 @@ export abstract class Worker {
 		return undefined;
 	}
 
-	// a post or a call from the main thread. for a call, the result is the answer
-	abstract onMessage( type: string, data: unknown ): unknown;
+	// a post or a call from the main thread. for a call, the result is the answer.
+	// a worker without onMessage reads its messages itself, in onRun (peekMessage...)
+	onMessage?( type: string, data: unknown ): unknown;
 
 	// called at the stop, after the end of onRun, before the thread ends
 	onStop( ): unknown {
@@ -208,10 +241,119 @@ export abstract class Worker {
 			signal.addEventListener( "abort", stop, { once: true } );
 		} );
 	}
+
+	// the next message, null if there is none: never waits, for a loop that has work to
+	// do. it sees the stop too (this.signal), that a loop without await would never see
+	peekMessage( ): WorkerMessage {
+		return reader( ).peek( );
+	}
+
+	// resolves when a message is there (it is not read) or when the worker stops
+	waitMessage( ): Promise<void> {
+		return reader( ).wait( );
+	}
+
+	// the next message, waited for. null: the worker stops
+	async getMessage( ): Promise<WorkerMessage> {
+		const box = reader( );
+
+		for( ;; ) {
+			const message = box.peek( );
+			if( message || stopper.signal.aborted ) {
+				return message;
+			}
+
+			await box.wait( );
+		}
+	}
 }
 
 function send( message: ToMain ) {
 	parentPort.postMessage( message );
+}
+
+function reader( ): Inbox {
+	if( !inbox ) {
+		throw new Error( "peekMessage, waitMessage and getMessage are for a worker without onMessage" );
+	}
+
+	return inbox;
+}
+
+// the messages of a worker that reads them itself (peekMessage, waitMessage, getMessage)
+// instead of receiving them in onMessage: they wait here, MAX_INBOX at most
+class Inbox {
+	private readonly queue: Incoming[] = [];
+	private readonly waiters: ( ( ) => void )[] = [];
+	// the call read by the worker and not answered yet
+	private owed = 0;
+
+	// accept: what runWorker does with a message of the port
+	constructor( private readonly accept: ( message: ToWorker ) => void ) {
+		stopper.signal.addEventListener( "abort", ( ) => this.wake( ) );
+	}
+
+	add( message: Incoming ) {
+		if( this.queue.length < MAX_INBOX ) {
+			this.queue.push( message );
+			this.wake( );
+		}
+		else if( message.k === "call" ) {
+			send( { k: "reply", id: message.id, ok: false, error: "worker busy" } );
+		}
+		else {
+			send( { k: "log", level: "warn", event: "worker.message.dropped", data: { type: message.type } } );
+		}
+	}
+
+	peek( ): WorkerMessage {
+		this.settle( );
+
+		// read from the port itself: a loop that never awaits would receive nothing, not even its stop
+		let next: { message: ToWorker };
+		while( next = receiveMessageOnPort( parentPort ) ) {
+			this.accept( next.message );
+		}
+
+		const message = stopper.signal.aborted ? null : this.queue.shift( );
+		if( !message ) {
+			return null;
+		}
+
+		const call = message.k === "call" ? message.id : 0;
+		this.owed = call;
+
+		return {
+			type: message.type,
+			data: message.data,
+			reply: value => {
+				if( call && this.owed === call ) {
+					this.owed = 0;
+					send( { k: "reply", id: call, ok: true, value } );
+				}
+			},
+		};
+	}
+
+	wait( ): Promise<void> {
+		if( this.queue.length || stopper.signal.aborted ) {
+			return Promise.resolve( );
+		}
+
+		return new Promise( resolve => this.waiters.push( resolve ) );
+	}
+
+	// a call read and left without answer must not wait for its timeout
+	settle( ) {
+		if( this.owed ) {
+			send( { k: "reply", id: this.owed, ok: false, error: "no answer" } );
+			this.owed = 0;
+		}
+	}
+
+	private wake( ) {
+		this.waiters.splice( 0 ).forEach( resolve => resolve( ) );
+	}
 }
 
 // the progress of one task, seen from the worker (see tasks.ts): "start" at its
@@ -296,14 +438,25 @@ export async function runWorker( ): Promise<void> {
 	let chain = Promise.resolve( );
 	let run = Promise.resolve( );
 
-	parentPort.on( "message", ( message: ToWorker ) => {
+	const accept = ( message: ToWorker ) => {
 		// the stop is signaled at once, not after the messages in the queue
 		if( message.k === "stop" ) {
 			stopper.abort( );
 		}
+		else if( inbox ) {
+			inbox.add( message );
+			return;
+		}
 
 		chain = chain.then( ( ) => handle( worker, message, ( ) => run ) );
-	} );
+	};
+
+	// no onMessage: the worker reads its messages itself
+	if( !worker.onMessage ) {
+		inbox = new Inbox( accept );
+	}
+
+	parentPort.on( "message", accept );
 
 	await worker.onStart( );
 	send( { k: "ready" } );
@@ -332,6 +485,9 @@ async function runLoop( worker: Worker ): Promise<void> {
 		finally {
 			process.exit( 1 );
 		}
+	}
+	finally {
+		inbox?.settle( );
 	}
 }
 

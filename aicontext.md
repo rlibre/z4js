@@ -494,13 +494,17 @@ abstract class Worker {
   post(type: string, data?: unknown): void          // to the main thread
   onStart(): unknown
   onRun(): unknown                                  // runs until the stop, beside the messages
-  abstract onMessage(type: string, data: unknown): unknown   // its result answers a call
+  onMessage?(type: string, data: unknown): unknown  // its result answers a call. absent: the worker reads its messages itself
   onStop(): unknown                                 // after the end of onRun
   get signal(): AbortSignal                         // fired as soon as the stop is asked
   wait(ms: number): Promise<boolean>                // true after ms, false at once on stop
+  peekMessage(): WorkerMessage                      // the next message at once, null if none. never waits
+  waitMessage(): Promise<void>                      // until a message is there (not read) or the stop
+  getMessage(): Promise<WorkerMessage>              // the next message, waited for. null: the worker stops
   progress(task: string | { broadcast: true }): Progress   // see Tasks
 }
 interface WorkerOptions { multiple?: boolean }
+interface WorkerMessage { type: string; data: unknown; reply(value?: unknown): void }   // reply answers a call, nothing for a post
 
 class Progress {                  // one task, seen from the worker: "start" sent at its creation
   readonly id: string
@@ -542,6 +546,35 @@ class Backup extends Worker {
   onMessage( type: string ) { throw new Error( `backup: unknown message "${type}"` ) }
 }
 ```
+
+A worker without `onMessage` reads its messages itself, in `onRun`, when it chooses to (`peekMessage`, `waitMessage` and `getMessage` throw in a worker that has an `onMessage`):
+
+```ts
+class Indexer extends Worker {
+  private readonly files: string[] = []
+
+  async onRun( ) {
+    let msg: WorkerMessage
+
+    while( !this.signal.aborted ) {
+      if( msg = this.peekMessage( ) ) {
+        this.dispatch( msg )                 // "add": this.files.push( ... ), "status": msg.reply( { ... } )
+      }
+      else if( this.files.length ) {
+        indexFile( this.files.shift( ) )     // heavy, synchronous
+      }
+      else {
+        await this.waitMessage( )            // nothing to do: sleeps until a message or the stop
+      }
+    }
+  }
+}
+```
+
+- `peekMessage` reads the port itself: a loop that never awaits still receives its messages. It also sees the stop: it fires `signal` and returns `null`. Such a loop must call it regularly, or the worker is terminated at the stop timeout.
+- A loop that only handles messages: `while( msg = await this.getMessage( ) ) { ... }`.
+- `msg.reply( value )` answers a `call`, before the next message is read: a call left without answer at the next `peekMessage` or `getMessage` (or at the end of `onRun`) is rejected (`"no answer"`).
+- The messages not read yet wait in a queue of 100: above, a `call` is rejected (`"worker busy"`), a `post` is logged (`worker.message.dropped`) and lost.
 
 A crashed worker is not restarted: logged, removed, its calls fail, its mutexes are released. Each thread is named `name#instance` in the debugger.
 
@@ -585,7 +618,7 @@ const progress = this.progress( { broadcast: true } )
 - The client opens the socket like any channel (ticket by `POST /api/tasks`, then `?ticket=`) and receives `TaskMessage`s. The text is plain text, never HTML.
 - A task is followed by its creator only, unless `broadcast`. A socket without user (unprotected group) is closed.
 - A worker reports only on a task created by the main thread, except a broadcast task it creates itself. Another worker may not report on a started task. Refusals are logged (`worker.task.refused`).
-- A progress left open when `onMessage` (or `onRun`) ends is closed: `done` if it succeeded, `fail( "failed" )` if it threw. A worker that dies fails its tasks (`"worker ended"`).
+- A progress left open when `onMessage` (or `onRun`) ends is closed: `done` if it succeeded, `fail( "failed" )` if it threw. A worker that dies fails its tasks (`"worker ended"`). A worker that reads its messages itself ends its progresses itself: they belong to `onRun`, which ends at the stop only.
 - A socket opened while a task runs receives its current state: `start`, then the last `step`.
 - 1000 tasks at most at the same time (`create` answers 503 above). The text of a step is cut to `MAX_TASK_TEXT`, the percent bounded to 0..100.
 - A worker processes its messages one at a time: a long task in `onMessage` delays the next messages of that worker.
