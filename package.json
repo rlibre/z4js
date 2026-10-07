@@ -27,7 +27,7 @@
 		"aicontext.md"
 	],
 	"scripts": {
-		"build": "x4build build",
+		"build": "x4build build --config z4.config.json",
 		"prepack": "npm run build",
 		"build-publish": "deno run --allow-all ./publish.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit",

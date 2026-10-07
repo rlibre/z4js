@@ -17,17 +17,28 @@
 
 // The z4js command line: development tools, run from the folder of a project.
 //
+//   z4js build [--config <file>] [--debug]
+//   z4js dev [--config <file>] [--no-restart|--no-run]
 //   z4js apidoc [--project=tsconfig.json] [--out=api.json]
 //   npm start | z4js log [--level=warn]
 
 import { writeFileSync } from "node:fs";
 import { argValue } from "../src/tools";
 import { apidoc } from "./apidoc";
+import { build } from "./build";
+import { dev } from "./dev";
 import { log } from "./log";
 
 const USAGE = `usage: z4js <command> [options]
 
 commands:
+  build    bundles the project described by z4.config.json (production build)
+           --config <file>             another configuration file
+           --debug                     readable output, linked source maps
+  dev      watches the sources, rebuilds, and runs Node after each successful build
+           --config <file>             another configuration file
+           --no-restart                launches Node once, keeps building
+           --no-run                    builds only
   apidoc   OpenAPI 3 description of the routes, read from the sources
            --project=<tsconfig.json>   project to read (default: tsconfig.json)
            --out=<file>                output file (default: standard output)
@@ -38,6 +49,14 @@ const command = process.argv[2];
 
 try {
 	switch( command ) {
+		case "build":
+			await build( process.argv.slice( 3 ) );
+			break;
+
+		case "dev":
+			await dev( process.argv.slice( 3 ) );
+			break;
+
 		case "apidoc": {
 			const { doc, warnings } = await apidoc( argValue( "project" ) ?? "tsconfig.json" );
 			warnings.forEach( w => console.error( "warning: " + w ) );

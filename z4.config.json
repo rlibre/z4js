@@ -4,7 +4,8 @@
 	],
 	"outdir": "bin",
 	"external": [
-		"typescript"
+		"typescript",
+		"esbuild"
 	],
 	"esbuild": {
 		"target": "node22",
