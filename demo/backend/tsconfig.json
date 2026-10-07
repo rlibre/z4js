@@ -1,5 +1,5 @@
 {
-	// type checking only: x4build (esbuild) does the build
+	// type checking only: z4js build (esbuild) does the build
 	"compilerOptions": {
 		"target": "ES2022",
 		"lib": ["ES2024"],

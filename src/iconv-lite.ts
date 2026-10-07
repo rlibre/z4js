@@ -25,7 +25,7 @@
 //
 // HOW
 // esbuild replaces the package by this file when it bundles the application. In the
-// x4.config.json of the application:
+// z4.config.json of the application:
 //
 //   "esbuild": { "alias": { "iconv-lite": "@r-libre/z4js/iconv-lite" } }
 //
@@ -55,7 +55,7 @@
 // - the BOM is removed, as iconv-lite does by default.
 //
 // TO REMOVE IT
-// 1. in the x4.config.json of each application, delete the "alias" entry above
+// 1. in the z4.config.json of each application, delete the "alias" entry above
 //    (the bundle takes the real iconv-lite again, about 340 KB more)
 // 2. in the package.json of z4js, delete the export "./iconv-lite"
 // 3. delete this file, and its mentions in aicontext.md, README.md and CLAUDE.md

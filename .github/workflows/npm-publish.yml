@@ -30,7 +30,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org/
 
-      # prepack builds the command line (bin/z4js.js) with x4build
+      # prepack builds the command line (bin/z4js.js) with esbuild
       - name: Install dependencies
         run: npm ci
 

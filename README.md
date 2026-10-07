@@ -249,7 +249,7 @@ No annotations, no decorators, no YAML in comments. The TypeScript compiler read
 | `express` 5 | HTTP routing |
 | `postgres` | Postgres access |
 | `ws` | WebSockets (`noServer` mode, one `upgrade` listener) |
-| `x4build` | build (esbuild) |
+| `esbuild` | build (`z4js build`, `z4js dev`) |
 | `@fastify/busboy` | files sent with a request (multipart), streamed to disk |
 
 That is all. No ORM, no validation library, no logger, no session store, no JWT library, no upload middleware. And what Express brings along is kept in check: two aliases in the build replace the 500 KB of encoding tables of `iconv-lite` by the `TextDecoder` Node already has, and the 157 KB of `mime-db` by the 54 KB that are actually read. The demo bundle goes from 1280 KB to 776 KB, and its workers from 684 KB to 29 KB. Sources are published as TypeScript, as is: what you debug is what was written.
@@ -270,6 +270,13 @@ cd ../backend && npm install && npm run build && npm start
 ```
 
 `npm run start:log` starts it with colored logs (`z4js log`).
+
+A project is built by the command line of z4js, from its `z4.config.json` (entry points, output folder, esbuild options):
+
+```
+npx z4js build          # production bundle (--debug: readable, with source maps)
+npx z4js dev            # rebuilds and restarts the server at each change
+```
 
 Checks for the framework itself:
 

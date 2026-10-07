@@ -9,7 +9,7 @@
 		"utf-8-validate"
 	],
 	"dev": {
-		"run": "dist/main.js",
+		"run": "src/main.ts",
 		"nodeArgs": ["--enable-source-maps"],
 		"args": ["--config=env/dev.json"]
 	},

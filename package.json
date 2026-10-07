@@ -27,7 +27,7 @@
 		"aicontext.md"
 	],
 	"scripts": {
-		"build": "x4build build --config z4.config.json",
+		"build": "esbuild cli/z4js.ts --bundle --platform=node --format=esm --target=node22 --charset=utf8 --keep-names --external:typescript --external:esbuild --outdir=bin --log-level=warning",
 		"prepack": "npm run build",
 		"build-publish": "deno run --allow-all ./publish.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit",
@@ -35,10 +35,10 @@
 	},
 	"dependencies": {
 		"@fastify/busboy": "^3.2.2",
+		"esbuild": "^0.28.0",
 		"express": "^5.1.0",
 		"postgres": "^3.4.0",
-		"ws": "^8.22.0",
-		"x4build": "^2.0.1"
+		"ws": "^8.22.0"
 	},
 	"devDependencies": {
 		"@types/express": "^5.0.0",

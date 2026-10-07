@@ -14,7 +14,7 @@ import { ... } from "@r-libre/z4js"           // src/index.ts: everything
 import { Shape } from "@r-libre/z4js/shape" // src/shared/shape.ts: also usable in a browser
 ```
 
-- Sources are published as TypeScript, as is. The application bundles them with x4build (esbuild).
+- Sources are published as TypeScript, as is. The application bundles them with `z4js build` (esbuild).
 - `strictNullChecks` is off: an object may be null implicitly. Types never say `| null` or `| undefined`.
 - Every refusal from a client is an `HttpError`: the client receives `{ error: "short message" }` and a status, never an internal detail.
 
@@ -766,9 +766,17 @@ date_clone, date_hash, date_calc_weeknum, calcAge, date_sql_utc
 ## Command line (`z4js`)
 
 ```
+z4js build [--config <file>] [--debug]
+z4js dev [--config <file>] [--no-restart|--no-run]
 z4js apidoc [--project=tsconfig.json] [--out=api.json]
 npm start | z4js log [--level=warn]
 ```
+
+`build` bundles the project described by `z4.config.json` (see the default project), with esbuild: a production build is minified, without source map; `--debug` keeps it readable and writes linked source maps. The output folder is emptied first. Two constants are defined in the sources: `DEBUG_MODE` (`false` in a production build) and `VERSION_ID` (the date of the build, `yymmdd`).
+
+`dev` watches the sources, rebuilds, and runs the output with Node after each successful build (`dev.run`, `dev.nodeArgs`, `dev.args`). `--no-restart` launches Node once and keeps building, `--no-run` only builds. A change of the configuration file reloads it.
+
+`--config <file>` gives another configuration file (it must exist). Relative paths are resolved from the folder of the project; `$VAR` and `${VAR}` are replaced by the environment variable.
 
 `log` colors the log lines read on the standard input, by level, when the output is a terminal (`NO_COLOR` disables it); `--level` hides the lines below a level, the security lines (`SEC`) are always shown. The logger itself never writes colors.
 
@@ -969,8 +977,8 @@ runWorker( )
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "x4build build --debug",
-		"dev": "x4build dev",
+		"build": "z4js build --debug",
+		"dev": "z4js dev",
 		"start": "node --enable-source-maps dist/main.js --config=env/dev.json",
 		"apidoc": "z4js apidoc --out=api.json"
 	},
@@ -984,7 +992,7 @@ runWorker( )
 }
 ```
 
-### `x4.config.json`
+### `z4.config.json`
 
 ```json
 {
@@ -992,7 +1000,7 @@ runWorker( )
 	"outdir": "dist",
 	"external": ["bufferutil", "utf-8-validate"],
 	"dev": {
-		"run": "dist/main.js",
+		"run": "src/main.ts",
 		"nodeArgs": ["--enable-source-maps"],
 		"args": ["--config=env/dev.json"]
 	},
@@ -1009,7 +1017,7 @@ runWorker( )
 }
 ```
 
-The banner gives `require` to the CommonJS dependencies bundled in an ESM output.
+The banner gives `require` to the CommonJS dependencies bundled in an ESM output. `dev.run` names the entry point to run (the source, one of `entryPoints`); it is required as soon as there are several. Other keys: `define` (esbuild define expressions), `copy` (`[{ "from": "assets", "to": "assets" }]`, copied into `outdir` after each build). Defaults: `entryPoints` `["src/main.ts"]`, `outdir` `./bin`, target `node20`; the `esbuild` object is applied last.
 
 The alias replaces `iconv-lite` (loaded by Express through body-parser, more than 500 KB of encoding tables) by `src/iconv-lite.ts`, which decodes with the `TextDecoder` of Node: about 340 KB less in the bundle. Only difference: a JSON body in utf-32 or utf-7 gets a 415. Optional: without the alias, the real iconv-lite is bundled. Details, and how to remove it, in the header of `src/iconv-lite.ts`.
 

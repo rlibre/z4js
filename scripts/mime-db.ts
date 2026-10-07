@@ -13,7 +13,7 @@
 // Checked with mime-db 1.54.0 and mime-types 3.0.2.
 //
 // HOW
-// The application bundler maps the package to the reduced file (x4.config.json):
+// The application bundler maps the package to the reduced file (z4.config.json):
 //
 //   "esbuild": { "alias": { "mime-db": "@r-libre/z4js/mime-db" } }
 //
@@ -28,7 +28,7 @@
 // file of such a type is served as application/octet-stream, never with a wrong type.
 //
 // TO REMOVE IT
-// 1. in the x4.config.json of each application, delete the "mime-db" alias
+// 1. in the z4.config.json of each application, delete the "mime-db" alias
 // 2. in the package.json of z4js, delete the export "./mime-db" and the script "mime-db"
 // 3. delete src/mime-db.json and this file, and their mentions in aicontext.md,
 //    README.md and CLAUDE.md

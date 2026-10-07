@@ -2,7 +2,7 @@
 
 Une petite application de notes : un backend z4js et un frontend x4js.
 
-- `backend/` : serveur z4js (SQLite, sessions, droits, step-up, WebSocket, workers), construit par x4build.
+- `backend/` : serveur z4js (SQLite, sessions, droits, step-up, WebSocket, workers), construit par `z4js build` (`z4.config.json`).
 - `frontend/` : interface x4js, construite par x4js, servie par le backend.
 
 ## Ce qu'elle montre

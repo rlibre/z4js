@@ -3,9 +3,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "x4build build --debug",
-		"build-full": "x4build build",
-		"dev": "x4build dev",
+		"build": "z4js build --debug",
+		"build-full": "z4js build",
+		"dev": "z4js dev",
 		"start": "node --enable-source-maps dist/main.js --config=env/dev.json",
 		"start:log": "npm start --silent | z4js log",
 		"apidoc": "z4js apidoc --out=api.json"
