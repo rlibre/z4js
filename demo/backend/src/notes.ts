@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { EndPoints, HttpError, noAccessCheck } from "@r-libre/z4js";
-import type { Access, Request, Response, Sessions, SqliteSql, Tasks, Workers } from "@r-libre/z4js";
+import type { Access, Request, Response, Sessions, SqliteSql, Tasks, WorkerHandle } from "@r-libre/z4js";
 import type { LiveChannel } from "./live";
 
 // limits of a note, as the client is told (characters)
@@ -29,7 +29,8 @@ interface Deps {
 	access: Access;
 	sessions: Sessions;
 	live: LiveChannel;
-	workers: Workers;
+	// the worker that counts the words
+	stats: WorkerHandle;
 	tasks: Tasks;
 }
 
@@ -104,7 +105,7 @@ export class NotesEP extends EndPoints {
 		await this.need( req, "notes/read" );
 
 		const rows = await this.deps.sql`select text from notes`;
-		res.json( await this.deps.workers.call( "stats", "count", { texts: rows.map( r => r.text ) } ) );
+		res.json( await this.deps.stats.call( "count", { texts: rows.map( r => r.text ) } ) );
 	}
 
 	// the worker reports the progress of the task: the answer gives its id at once
@@ -113,7 +114,7 @@ export class NotesEP extends EndPoints {
 
 		const rows = await this.deps.sql`select text from notes`;
 		const task = this.deps.tasks.create( req.user );
-		this.deps.workers.post( "stats", "recount", { task, texts: rows.map( r => r.text ) } );
+		this.deps.stats.post( "recount", { task, texts: rows.map( r => r.text ) } );
 
 		res.status( 202 ).json( { task } );
 	}

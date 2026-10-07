@@ -275,15 +275,17 @@ A `Channel` notes its endpoints, and is mounted in a group like an `EndPoints` o
 
 Use a worker for CPU-heavy or long work that must not block the requests.
 
-- All worker classes are registered in one entry file, which ends with `runWorker( )`.
+- All worker classes are registered in one entry file (`Worker.register( "stats", Stats )`), which ends with `runWorker( )`.
+- The main starts a worker of a registered class and keeps the object it gets: `const stats = await workers.start( "stats" )`. Talk to that object (`stats.post`, `stats.call`, `stats.on`), given to the `EndPoints` that need it; `workers.get( class, name )` finds it again (`null` if not started). `Workers` itself has no `post` nor `call`.
+- One worker per thing that must be addressed (an automaton, a device): same class, a name each, its parameters in `data` (`workers.start( "autom", { name: "press", data: { ip } } )`, read with `this.data`). Use `instances` only for interchangeable workers: one is taken in turn, never a chosen one.
 - `onMessage( type, data )` returns the answer of a `call`.
 - A worker that runs until its stop (periodic task, polling) puts its loop in `onRun`, paced by `while( await this.wait( ms ) )`. Never loop in `onStart`: `workers.start` would never return. Pass `this.signal` to anything that can be aborted (`fetch`...).
 - A worker whose `onRun` does heavy or synchronous work and must stay reachable has no `onMessage`: its loop reads the messages itself, `if( msg = this.peekMessage( ) ) { ... } else if( work ) { ... } else { await this.waitMessage( ); }`, under `while( !this.signal.aborted )`. Answer a `call` with `msg.reply( value )` before reading the next message, and end every progress yourself (`done` or `fail`). Never mix the two: `peekMessage`, `waitMessage` and `getMessage` throw in a worker that has an `onMessage`.
 - A worker opens its own database connection (in `onStart`, closed in `onStop`): a connection cannot cross threads.
-- A long task the user waits for reports its progress: the handler creates the task (`tasks.create( req.user )`), posts it to the worker and answers `202 { task }`; the worker calls `this.progress( data.task )`, then `step( text, percent? )` and `done( )` or `fail( text )`. Never send progress through `workers.on` or a channel of your own.
+- A long task the user waits for reports its progress: the handler creates the task (`tasks.create( req.user )`), posts it to the worker and answers `202 { task }`; the worker calls `this.progress( data.task )`, then `step( text, percent? )` and `done( )` or `fail( text )`. Never send progress through `on` or a channel of your own.
 - Await the work inside `onMessage`: a progress still open when it returns is closed as done.
 - A worker logs with `this.log`; the main thread writes the lines.
-- Use `workers.call` when the request waits for the result, `workers.post` when it does not.
+- Use `call` when the request waits for the result, `post` when it does not.
 - Pass `onStop: ( ) => workers.stop( )` to `serve` so the workers stop after the requests.
 
 A `Mutex` protects a resource shared by threads. Its name is a fixed string:

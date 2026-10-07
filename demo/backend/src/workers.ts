@@ -17,7 +17,7 @@ class Stats extends Worker {
 				return this.mutex.withLock( 1000, ( ) => {
 					const words = countWords( data.texts );
 					this.log.info( "stats.counted", { notes: data.texts.length, words } );
-					return { notes: data.texts.length, words, by: `${this.name}#${this.instance}` };
+					return { notes: data.texts.length, words, by: this.id };
 				} );
 
 			case "recount":

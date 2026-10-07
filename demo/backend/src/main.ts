@@ -37,14 +37,14 @@ await seed( sql );
 const tasks = new Tasks( );
 
 const workers = new Workers( { config, logger, tasks } );
-await workers.start( "stats" );
+const stats = await workers.start( "stats" );
 await workers.start( "backup" );
 
 const live = new LiveChannel( );
 
 // every route of /api needs a session; /auth is open (login, refresh, logout, stepup)
 const api = RouteGroup.guarded( "/api", sessions.guard )
-	.add( "/notes", new NotesEP( { sql, access, sessions, live, workers, tasks } ) )
+	.add( "/notes", new NotesEP( { sql, access, sessions, live, stats, tasks } ) )
 	.add( "/me", new MeEP( ) )
 	.add( "/live", live )
 	.add( "/tasks", tasks );

@@ -486,11 +486,14 @@ Worker side, in the single entry file `workers.ts` (built as `workers.js` next t
 
 ```ts
 abstract class Worker {
-  readonly name: string
+  readonly class: string          // the name its class is registered under
+  readonly name: string           // its own name (workers.start), default: the name of its class
   readonly instance: number
+  readonly id: string             // "name@class", or "name@class#instance" when started with instances
+  readonly data: unknown          // what workers.start gave it (options.data): its own copy
   readonly config: Config         // loaded by the main thread, frozen again
   readonly log: WorkerLog         // debug / info / warn / error / fatal, written by the main thread
-  static register(name: string, cls: new () => Worker, options?: WorkerOptions): void
+  static register(name: string, cls: new () => Worker): void   // a class, under the name workers.start asks for
   post(type: string, data?: unknown): void          // to the main thread
   onStart(): unknown
   onRun(): unknown                                  // runs until the stop, beside the messages
@@ -503,7 +506,6 @@ abstract class Worker {
   getMessage(): Promise<WorkerMessage>              // the next message, waited for. null: the worker stops
   progress(task: string | { broadcast: true }): Progress   // see Tasks
 }
-interface WorkerOptions { multiple?: boolean }
 interface WorkerMessage { type: string; data: unknown; reply(value?: unknown): void }   // reply answers a call, nothing for a post
 
 class Progress {                  // one task, seen from the worker: "start" sent at its creation
@@ -521,16 +523,45 @@ Main side:
 ```ts
 class Workers {
   constructor(options: WorkersOptions)                 // { config, logger, file?, tasks? }
-  start(name: string, instances?: number): Promise<void>
-  post(name: string, type: string, data?: unknown): void          // one instance, in turn
-  broadcast(name: string, type: string, data?: unknown): void     // every instance
-  call<T = unknown>(name: string, type: string, data?: unknown, timeoutMs?: number): Promise<T>  // default 30 000, none in debug
-  on(name: string, type: string, handler: (data: unknown, from: WorkerInfo) => unknown): void
+  start(cls: string, options?: StartOptions): Promise<WorkerHandle>   // a worker of this registered class
+  get(cls: string, name?: string): WorkerHandle        // found again by class and name, null if not started or ended
   list(): WorkerInfo[]
-  stop(timeoutMs?: number): Promise<void>              // default config.server.shutdownMs
+  stop(timeoutMs?: number): Promise<void>              // every worker. default config.server.shutdownMs
 }
-interface WorkerInfo { name: string; instance: number; threadId: number; started: Date; state: "starting" | "running" | "stopping" }
+interface StartOptions {
+  name?: string         // default: the name of the class. two workers of one class need a name each
+  instances?: number    // interchangeable instances, served in turn. given (even 1): each has its number in its id
+  data?: unknown        // given to the worker (this.data). plain data, copied to its thread
+}
+
+class WorkerHandle {              // a started worker: the object the application talks to
+  readonly id: string             // "name@class"
+  readonly class: string
+  readonly name: string
+  post(type: string, data?: unknown): void          // one instance, in turn
+  broadcast(type: string, data?: unknown): void     // every instance
+  call<T = unknown>(type: string, data?: unknown, timeoutMs?: number): Promise<T>  // default 30 000, none in debug
+  on(type: string, handler: (data: unknown, from: WorkerInfo) => unknown): void   // posted by the worker
+}
+interface WorkerInfo { id: string; class: string; name: string; instance: number; threadId: number; started: Date; state: "starting" | "running" | "stopping" }
 ```
+
+```ts
+const stats = await workers.start( "stats" )                                     // stats@stats
+const render = await workers.start( "render", { instances: 4 } )                 // render@render#0 .. #3
+const press = await workers.start( "autom", { name: "press", data: { ip } } )    // press@autom
+const oven = await workers.start( "autom", { name: "oven", data: { ip } } )      // same class, its own thread
+
+press.post( "write", { address: 12, value: 1 } )
+const pdf = await render.call( "pdf", { id } )
+workers.get( "autom", "oven" ).post( "write", { ... } )
+```
+
+- A worker is a class and a name. Without `name` it is named like its class, so a class can then be started once.
+- The instances of a worker are interchangeable: `post` and `call` take one in turn, none can be addressed. What must be addressed (one automaton, one device) is a worker of its own, with its name.
+- The id is `name@class`; an instance adds `#n` when the worker was started with `instances`. It is the name of the thread in the debugger and the `worker` field of its log lines. A class or a name holds no `@`, `#` nor space.
+- `Workers` has no `post`, `call`, `broadcast` nor `on`: only the `WorkerHandle` talks. Keep the object given by `start` (pass it to the `EndPoints` that use it), or find it again with `get`.
+- A handle whose worker ended throws (`not running`), `get` returns `null`, and the same class and name may be started again.
 
 Lifecycle: `onStart`, then the messages (one at a time, in order) and `onRun` beside them. `workers.start` resolves after `onStart`, without waiting for `onRun`. The stop fires `signal` at once, waits for the end of `onRun`, then runs `onStop`. An error that ends `onRun` is logged (`worker.run.failed`) and ends the worker.
 
@@ -576,7 +607,7 @@ class Indexer extends Worker {
 - `msg.reply( value )` answers a `call`, before the next message is read: a call left without answer at the next `peekMessage` or `getMessage` (or at the end of `onRun`) is rejected (`"no answer"`).
 - The messages not read yet wait in a queue of 100: above, a `call` is rejected (`"worker busy"`), a `post` is logged (`worker.message.dropped`) and lost.
 
-A crashed worker is not restarted: logged, removed, its calls fail, its mutexes are released. Each thread is named `name#instance` in the debugger.
+A crashed worker is not restarted: logged, removed, its calls fail, its mutexes are released. Each thread is named by its id in the debugger (`press@autom`, `render@render#2`).
 
 ---
 
@@ -601,9 +632,9 @@ const tasks = new Tasks( )
 const workers = new Workers( { config, logger, tasks } )
 const api = RouteGroup.guarded( "/api", sessions.guard ).add( "/tasks", tasks )
 
-// handler
+// handler (importer: the object given by workers.start( "import" ))
 const task = tasks.create( req.user )
-workers.post( "import", "run", { task, file } )
+importer.post( "run", { task, file } )
 res.status( 202 ).json( { task } )
 
 // worker
@@ -775,7 +806,7 @@ await Model.updateAll( sql )
 await Model.validateAll( sql )
 
 const workers = new Workers( { config, logger } )
-await workers.start( "stats" )
+const stats = await workers.start( "stats" )      // given to the EndPoints that call it
 
 const api = RouteGroup.guarded( "/api", sessions.guard )
   .add( "/notes", new NotesEP( { sql, access } ) )

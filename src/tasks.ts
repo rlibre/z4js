@@ -20,7 +20,7 @@
 // it, so the client can match the messages it receives. The worker reports on it:
 //
 //   handler   const task = tasks.create( req.user );                // or { broadcast: true }
-//             workers.post( "import", "run", { task, file } );
+//             importer.post( "run", { task, file } );              // the object of the worker (workers.start)
 //             res.status( 202 ).json( { task } );
 //
 //   worker    const progress = this.progress( data.task );          // "start"
@@ -85,7 +85,7 @@ interface Task {
 	id: string;
 	user: string;			// null: broadcast only
 	broadcast: boolean;
-	worker: string;			// "name#instance" of the worker that started it, null before
+	worker: string;			// id of the worker that started it ("name@class#instance"), null before
 	text: string;
 	percent: number;
 }

@@ -145,11 +145,11 @@ The SQLite wrapper adds no dependency. It queues requests during a transaction, 
 ## Threads without ceremony
 
 ```ts
-await workers.start( "stats" );
-const result = await workers.call( "stats", "count", { texts } );
+const stats = await workers.start( "stats" );
+const result = await stats.call( "count", { texts } );
 ```
 
-Workers are classes registered by name in a single entry file. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
+Workers are classes registered by name in a single entry file. Starting one gives the object you talk to. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
 
 A worker that runs until the server stops, a periodic backup for instance, puts its loop in `onRun`:
 
@@ -165,6 +165,18 @@ class Backup extends Worker {
 ```
 
 The stop interrupts the wait, lets the current round end, then calls `onStop`. A loop that dies is logged and ends the worker: it never fails in silence.
+
+A class can be started several times, each worker with its name and its own data. One automaton, one worker:
+
+```ts
+const press = await workers.start( "autom", { name: "press", data: { ip: "10.0.0.5" } } );
+const oven = await workers.start( "autom", { name: "oven", data: { ip: "10.0.0.6" } } );
+
+press.post( "write", { address: 12, value: 1 } );
+workers.get( "autom", "oven" ).post( "write", { address: 3, value: 0 } );
+```
+
+An order never reaches the wrong one: `post` and `call` belong to the object of a worker, and only interchangeable instances (`{ instances: 4 }`) are served in turn. Logs and the debugger name each thread `press@autom`, `render@render#2`.
 
 A worker with heavy work to do stays reachable by reading its messages itself, between two pieces of work, instead of receiving them in `onMessage`:
 
@@ -197,7 +209,7 @@ A worker bundles only what it uses: the package declares no side effect at impor
 ```ts
 // the handler: the task id comes back at once
 const task = tasks.create( req.user );
-workers.post( "import", "run", { task, file: data.id } );
+importer.post( "run", { task, file: data.id } );
 res.status( 202 ).json( { task } );
 
 // the worker

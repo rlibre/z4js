@@ -37,21 +37,30 @@
 //           }
 //       }
 //   }
-//   Worker.register( "mailer", Mailer );
-//   Worker.register( "render", Render, { multiple: true } );   // several instances allowed
+//   Worker.register( "mailer", Mailer );                       // a class, under a name
+//   Worker.register( "render", Render );
+//   Worker.register( "autom", Autom );
 //   runWorker( );
 //
-// The main thread starts them by name and talks to them:
+// The main thread starts workers of these classes. Each one is an object it talks to:
 //
 //   const workers = new Workers( { config, logger } );
-//   await workers.start( "mailer" );
-//   await workers.start( "render", 4 );
-//   workers.post( "mailer", "send", { to } );                  // one instance, in turn
-//   workers.broadcast( "render", "clear-cache" );              // every instance
-//   const pdf = await workers.call( "render", "pdf", { id } );
-//   workers.on( "mailer", "sent", ( data, info ) => ... );     // posted by a worker
+//   const mailer = await workers.start( "mailer" );                                  // mailer@mailer
+//   const render = await workers.start( "render", { instances: 4 } );                // render@render#0 .. #3
+//   const press = await workers.start( "autom", { name: "press", data: { ip } } );   // press@autom
+//   const oven = await workers.start( "autom", { name: "oven", data: { ip } } );     // same class, its own thread
+//
+//   mailer.post( "send", { to } );                             // one instance, in turn
+//   render.broadcast( "clear-cache" );                         // every instance
+//   const pdf = await render.call( "pdf", { id } );
+//   press.on( "alarm", ( data, from ) => ... );                // posted by the worker
+//   workers.get( "autom", "oven" ).post( "write", { ... } );   // found again by class and name
 //   workers.list( );
 //   await workers.stop( );
+//
+// A worker is a class and a name ("name@class"); without a name, it is named like its
+// class. Its instances are interchangeable: post and call take one in turn, and none can
+// be addressed. What must be addressed gets a name of its own (one worker per automaton).
 //
 // Lifecycle of a worker: onStart, then the messages (one at a time, in order) and
 // onRun beside them. The stop fires this.signal at once (a wait in progress returns
@@ -70,7 +79,8 @@
 // restarted: it is logged, removed from the list, its pending calls fail and the
 // mutexes it held are released.
 //
-// Debugging: each thread is named "<name>#<instance>", the name the debugger shows.
+// Debugging: each thread is named by the id of its worker ("press@autom",
+// "render@render#2"), the name the debugger shows.
 // VS Code attaches by itself to the workers of the process it debugs (breakpoints in
 // the workers need the source maps of workers.js). In debug mode (config.mode), a
 // worker stopped on a breakpoint must not be taken for a dead one: the calls have no
@@ -86,7 +96,7 @@ import type { Logger, LogLevel } from "./logger";
 import { closeMutexes, mutexBuffers, releaseThread } from "./mutex";
 import type { MutexBuffers } from "./mutex";
 import type { TaskReport, Tasks } from "./tasks";
-import { deepFreeze, isString } from "./tools";
+import { deepFreeze, isString, isUIntNumber } from "./tools";
 
 const DEFAULT_CALL_MS = 30_000;
 const MAX_INBOX = 100;
@@ -119,19 +129,16 @@ type ToMain =
 	| { k: "stopped" };
 
 interface StartData {
+	class: string;
 	name: string;
 	instance: number;
-	instances: number;
+	id: string;
+	data: unknown;
 	config: unknown;
 	mutexes: MutexBuffers;
 }
 
 // -- worker side ----------------------------------------------------------------------
-
-export interface WorkerOptions {
-	// several instances of this worker may run (start( name, n ))
-	multiple?: boolean;
-}
 
 // the log of a worker: same methods as Logger, lines written by the main thread
 export type WorkerLog = Pick<Logger, LogLevel>;
@@ -150,17 +157,27 @@ export interface WorkerMessage {
 export abstract class Worker {
 	// the classes of the entry file, by name. a static registry, because the classes
 	// register themselves when the file is loaded, before runWorker picks one
-	private static readonly registry = new Map<string, { cls: new ( ) => Worker, options: WorkerOptions }>( );
+	private static readonly registry = new Map<string, new ( ) => Worker>( );
 
+	// the name its class is registered under
+	readonly class: string;
+	// its own name, given by workers.start (default: the name of its class)
 	readonly name: string;
 	readonly instance: number;
+	// "name@class", or "name@class#instance" for a worker started with instances
+	readonly id: string;
+	// what workers.start gave it (options.data): its own copy
+	readonly data: unknown;
 	readonly config: Config;
 	readonly log: WorkerLog;
 
 	constructor( ) {
 		const start = workerData as StartData;
+		this.class = start.class;
 		this.name = start.name;
 		this.instance = start.instance;
+		this.id = start.id;
+		this.data = start.data;
 		this.config = start.config as Config;
 
 		const log = {} as WorkerLog;
@@ -171,19 +188,20 @@ export abstract class Worker {
 		this.log = log;
 	}
 
-	static register( name: string, cls: new ( ) => Worker, options: WorkerOptions = {} ) {
+	// a class of the entry file, under the name workers.start asks for
+	static register( name: string, cls: new ( ) => Worker ) {
 		if( Worker.registry.has( name ) ) {
-			throw new Error( `worker "${name}" is already registered` );
+			throw new Error( `worker class "${name}" is already registered` );
 		}
 
-		Worker.registry.set( name, { cls, options } );
+		Worker.registry.set( name, cls );
 	}
 
 	static find( name: string ) {
 		return Worker.registry.get( name ) ?? null;
 	}
 
-	// a message posted to the main thread (workers.on)
+	// a message posted to the main thread (the on of its WorkerHandle)
 	post( type: string, data?: unknown ) {
 		send( { k: "post", type, data } );
 	}
@@ -422,17 +440,13 @@ export async function runWorker( ): Promise<void> {
 	}
 
 	const start = workerData as StartData;
-	const entry = Worker.find( start.name );
-	if( !entry ) {
-		throw new Error( `worker "${start.name}" is not registered in the workers entry file` );
-	}
-
-	if( start.instances > 1 && !entry.options.multiple ) {
-		throw new Error( `worker "${start.name}" does not allow several instances` );
+	const cls = Worker.find( start.class );
+	if( !cls ) {
+		throw new Error( `worker class "${start.class}" is not registered in the workers entry file` );
 	}
 
 	deepFreeze( start.config );
-	const worker = new entry.cls( );
+	const worker = new cls( );
 
 	// one message at a time, in order (like the WebSocket messages)
 	let chain = Promise.resolve( );
@@ -472,7 +486,7 @@ async function runLoop( worker: Worker ): Promise<void> {
 		await tracked( ( ) => worker.onRun( ) );
 	}
 	catch( e ) {
-		worker.log.error( "worker.run.failed", { worker: worker.name, error: e } );
+		worker.log.error( "worker.run.failed", { error: e } );
 		if( stopper.signal.aborted ) {
 			return;
 		}
@@ -499,7 +513,7 @@ async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<vo
 				await tracked( ( ) => worker.onMessage( message.type, message.data ) );
 			}
 			catch( e ) {
-				worker.log.error( "worker.message.failed", { worker: worker.name, type: message.type, error: e } );
+				worker.log.error( "worker.message.failed", { type: message.type, error: e } );
 			}
 			break;
 
@@ -528,9 +542,13 @@ async function handle( worker: Worker, message: ToWorker, run: ( ) => Promise<vo
 
 // -- main side ------------------------------------------------------------------------
 
-// "name#instance": the name of the thread in the debugger, and the owner of its tasks
-function threadName( w: { name: string, instance: number } ): string {
-	return `${w.name}#${w.instance}`;
+// a class or a worker name: no "@" nor "#", so that an id reads one way only
+const NAME_RE = /^[^@#\s]+$/;
+
+// "name@class": a started worker, in the logs and in the debugger. its instances add
+// "#n" when it was started with instances (see StartOptions)
+function workerId( cls: string, name: string ): string {
+	return `${name}@${cls}`;
 }
 
 export interface WorkersOptions {
@@ -542,7 +560,22 @@ export interface WorkersOptions {
 	tasks?: Tasks;
 }
 
+export interface StartOptions {
+	// the name of the worker, default: the name of its class. two workers of the same
+	// class need a name each
+	name?: string;
+	// that many interchangeable instances, served in turn. as soon as it is given (even
+	// 1), each instance has its number in its id: "name@class#0"
+	instances?: number;
+	// given to the worker (this.data), like the arguments of a constructor. copied to
+	// its thread: plain data, no function, no open connection
+	data?: unknown;
+}
+
 export interface WorkerInfo {
+	// "name@class", or "name@class#instance" for a worker started with instances
+	id: string;
+	class: string;
 	name: string;
 	instance: number;
 	threadId: number;
@@ -555,57 +588,66 @@ type PostHandler = ( data: unknown, from: WorkerInfo ) => unknown;
 interface Running {
 	info: WorkerInfo;
 	thread: NodeWorker;
+	group: Group;
 	// timer null: no timeout (debug)
 	calls: Map<number, { resolve: ( v: unknown ) => void, reject: ( e: Error ) => void, timer: NodeJS.Timeout }>;
 }
 
-// the workers seen from the main thread: starts them by name, talks to them,
-// lists and stops them
-export class Workers {
-	private readonly running = new Map<string, Running[]>( );
-	private readonly handlers = new Map<string, PostHandler>( );
-	private readonly turns = new Map<string, number>( );
-	private readonly file: string;
+// one started worker: its threads and its handlers, shared by Workers (which starts
+// and ends the threads) and by its WorkerHandle (which talks to them)
+interface Group {
+	handle: WorkerHandle;
+	threads: Running[];
+	// by message type
+	handlers: Map<string, PostHandler>;
+}
+
+// a started worker, seen from the main thread: the object the application talks to.
+// made by workers.start, found again by workers.get
+export class WorkerHandle {
+	// "name@class"
+	readonly id: string;
+	readonly class: string;
+	readonly name: string;
+	private turn = 0;
 	private nextCall = 1;
 
-	constructor( private readonly options: WorkersOptions ) {
-		this.file = options.file ?? join( dirname( process.argv[1] ), "workers.js" );
-	}
-
-	// starts the worker (n instances), resolves once each one ran its onStart
-	async start( name: string, instances = 1 ): Promise<void> {
-		if( this.running.has( name ) ) {
-			throw new Error( `worker "${name}" is already started` );
-		}
-
-		const list: Running[] = [];
-		this.running.set( name, list );
-
-		await Promise.all( Array.from( { length: instances }, ( _, i ) => this.spawn( name, i, instances, list ) ) );
+	// made by workers.start( ). debug: the calls have no timeout
+	constructor(
+		cls: string,
+		name: string,
+		private readonly threads: Running[],
+		private readonly handlers: Map<string, PostHandler>,
+		private readonly debug: boolean,
+	) {
+		this.id = workerId( cls, name );
+		this.class = cls;
+		this.name = name;
 	}
 
 	// one instance, in turn
-	post( name: string, type: string, data?: unknown ) {
-		this.pick( name ).thread.postMessage( { k: "post", type, data } satisfies ToWorker );
+	post( type: string, data?: unknown ) {
+		this.pick( ).thread.postMessage( { k: "post", type, data } satisfies ToWorker );
 	}
 
 	// every instance
-	broadcast( name: string, type: string, data?: unknown ) {
-		for( const w of this.instances( name ) ) {
+	broadcast( type: string, data?: unknown ) {
+		for( const w of this.running( ) ) {
 			w.thread.postMessage( { k: "post", type, data } satisfies ToWorker );
 		}
 	}
 
-	// one instance, in turn: the result of its onMessage. rejects on error, timeout or crash
-	call<T = unknown>( name: string, type: string, data?: unknown, timeoutMs = DEFAULT_CALL_MS ): Promise<T> {
-		const w = this.pick( name );
+	// one instance, in turn: the result of its onMessage, or its reply. rejects on error,
+	// timeout or crash
+	call<T = unknown>( type: string, data?: unknown, timeoutMs = DEFAULT_CALL_MS ): Promise<T> {
+		const w = this.pick( );
 		const id = this.nextCall++;
 
 		return new Promise<T>( ( resolve, reject ) => {
 			// debug: the worker may be stopped on a breakpoint
-			const timer = this.options.config.debug ? null : setTimeout( ( ) => {
+			const timer = this.debug ? null : setTimeout( ( ) => {
 				w.calls.delete( id );
-				reject( new Error( `worker "${name}": call "${type}" timeout` ) );
+				reject( new Error( `worker "${this.id}": call "${type}" timeout` ) );
 			}, timeoutMs );
 
 			w.calls.set( id, { resolve: resolve as ( v: unknown ) => void, reject, timer } );
@@ -613,13 +655,84 @@ export class Workers {
 		} );
 	}
 
-	// the messages of this type posted by the workers of this name (one handler)
-	on( name: string, type: string, handler: PostHandler ) {
-		this.handlers.set( `${name}\n${type}`, handler );
+	// the messages of this type posted by the worker (one handler)
+	on( type: string, handler: PostHandler ) {
+		this.handlers.set( type, handler );
+	}
+
+	private running( ): Running[] {
+		if( !this.threads.length ) {
+			throw new Error( `worker "${this.id}" is not running` );
+		}
+
+		return this.threads;
+	}
+
+	// in turn among the instances
+	private pick( ): Running {
+		const list = this.running( );
+		this.turn %= list.length;
+		return list[this.turn++];
+	}
+}
+
+// the workers seen from the main thread: starts them, finds them again, lists and
+// stops them
+export class Workers {
+	// by worker id
+	private readonly groups = new Map<string, Group>( );
+	private readonly file: string;
+
+	constructor( private readonly options: WorkersOptions ) {
+		this.file = options.file ?? join( dirname( process.argv[1] ), "workers.js" );
+	}
+
+	// starts a worker of this registered class and resolves once it ran its onStart (each
+	// of its instances). the result is the object to talk to it
+	async start( cls: string, options: StartOptions = {} ): Promise<WorkerHandle> {
+		const name = options.name ?? cls;
+		if( !NAME_RE.test( cls ) || !NAME_RE.test( name ) ) {
+			throw new Error( `worker: invalid class or name ("${cls}", "${name}")` );
+		}
+
+		const id = workerId( cls, name );
+		if( this.groups.has( id ) ) {
+			throw new Error( `worker "${id}" is already started` );
+		}
+
+		// instances given: a group, each instance has its number
+		const numbered = options.instances !== undefined;
+		const count = numbered ? options.instances : 1;
+		if( !isUIntNumber( count ) || count < 1 ) {
+			throw new Error( `worker "${id}": instances must be an integer of 1 or more` );
+		}
+
+		const threads: Running[] = [];
+		const handlers = new Map<string, PostHandler>( );
+		const handle = new WorkerHandle( cls, name, threads, handlers, this.options.config.debug );
+		const group: Group = { handle, threads, handlers };
+		this.groups.set( id, group );
+
+		try {
+			await Promise.all( Array.from( { length: count }, ( _, i ) => this.spawn( group, i, numbered, options.data ) ) );
+		}
+		catch( e ) {
+			// no thread at all (data that cannot be copied...): the name is free again
+			this.forget( group );
+			throw e;
+		}
+
+		return handle;
+	}
+
+	// the worker of this class and name (without name: the one named like its class).
+	// null if it is not started, or ended
+	get( cls: string, name = cls ): WorkerHandle {
+		return this.groups.get( workerId( cls, name ) )?.handle ?? null;
 	}
 
 	list( ): WorkerInfo[] {
-		return [...this.running.values( )].flat( ).map( w => ( { ...w.info } ) );
+		return this.all( ).map( w => ( { ...w.info } ) );
 	}
 
 	// no new mutex, the held ones are released, then each worker runs its onStop.
@@ -632,13 +745,12 @@ export class Workers {
 			logger.warn( "worker.mutex.held", { mutexes: held } );
 		}
 
-		const all = [...this.running.values( )].flat( );
-		await Promise.all( all.map( w => new Promise<void>( resolve => {
+		await Promise.all( this.all( ).map( w => new Promise<void>( resolve => {
 			w.info.state = "stopping";
 
 			// debug: a worker stopped on a breakpoint is waited for, not terminated
 			const timer = this.options.config.debug ? null : setTimeout( ( ) => {
-				logger.warn( "worker.stop.timeout", { worker: w.info.name, instance: w.info.instance } );
+				logger.warn( "worker.stop.timeout", { worker: w.info.id } );
 				void w.thread.terminate( );
 			}, timeoutMs );
 
@@ -651,25 +763,28 @@ export class Workers {
 		} ) ) );
 	}
 
-	private spawn( name: string, instance: number, instances: number, list: Running[] ): Promise<void> {
+	private spawn( group: Group, instance: number, numbered: boolean, data: unknown ): Promise<void> {
 		const { config, logger } = this.options;
-		const start: StartData = { name, instance, instances, config, mutexes: mutexBuffers( ) };
+		const { handle } = group;
+		const id = numbered ? `${handle.id}#${instance}` : handle.id;
+		const start: StartData = { class: handle.class, name: handle.name, instance, id, data, config, mutexes: mutexBuffers( ) };
 		// the name shown by the debugger, and in worker_threads.threadName
-		const thread = new NodeWorker( this.file, { workerData: start, name: threadName( { name, instance } ) } );
+		const thread = new NodeWorker( this.file, { workerData: start, name: id } );
 
 		const w: Running = {
-			info: { name, instance, threadId: thread.threadId, started: new Date( ), state: "starting" },
+			info: { id, class: handle.class, name: handle.name, instance, threadId: thread.threadId, started: new Date( ), state: "starting" },
 			thread,
+			group,
 			calls: new Map( ),
 		};
 
-		list.push( w );
+		group.threads.push( w );
 
 		return new Promise<void>( ( resolve, reject ) => {
 			thread.on( "message", ( message: ToMain ) => this.receive( w, message, resolve ) );
 
 			thread.on( "error", e => {
-				logger.error( "worker.crashed", { worker: name, instance, error: e } );
+				logger.error( "worker.crashed", { worker: id, error: e } );
 				if( w.info.state === "starting" ) {
 					reject( e );
 				}
@@ -680,20 +795,20 @@ export class Workers {
 
 				for( const call of w.calls.values( ) ) {
 					clearTimeout( call.timer );
-					call.reject( new Error( `worker "${name}" ended` ) );
+					call.reject( new Error( `worker "${id}" ended` ) );
 				}
 
 				// its running tasks fail
-				this.options.tasks?.workerEnded( threadName( w.info ) );
+				this.options.tasks?.workerEnded( id );
 
 				const released = releaseThread( w.info.threadId );
 				if( released.length ) {
-					logger.warn( "worker.mutex.released", { worker: name, instance, mutexes: released } );
+					logger.warn( "worker.mutex.released", { worker: id, mutexes: released } );
 				}
 
 				if( w.info.state !== "stopping" ) {
-					logger.error( "worker.exited", { worker: name, instance, code } );
-					reject( new Error( `worker "${name}" exited (${code})` ) );
+					logger.error( "worker.exited", { worker: id, code } );
+					reject( new Error( `worker "${id}" exited (${code})` ) );
 				}
 			} );
 		} );
@@ -701,6 +816,7 @@ export class Workers {
 
 	private receive( w: Running, message: ToMain, ready: ( ) => void ) {
 		const { logger } = this.options;
+		const worker = w.info.id;
 
 		switch( message.k ) {
 			case "ready":
@@ -709,14 +825,14 @@ export class Workers {
 				break;
 
 			case "post": {
-				const handler = this.handlers.get( `${w.info.name}\n${message.type}` );
+				const handler = w.group.handlers.get( message.type );
 				if( handler ) {
 					void Promise.resolve( ).then( ( ) => handler( message.data, { ...w.info } ) ).catch( e => {
-						logger.error( "worker.handler.failed", { worker: w.info.name, type: message.type, error: e } );
+						logger.error( "worker.handler.failed", { worker, type: message.type, error: e } );
 					} );
 				}
 				else {
-					logger.warn( "worker.post.unhandled", { worker: w.info.name, type: message.type } );
+					logger.warn( "worker.post.unhandled", { worker, type: message.type } );
 				}
 				break;
 			}
@@ -734,7 +850,7 @@ export class Workers {
 			case "log":
 				// the level comes from the worker: checked against the list, as the event name is by the logger
 				if( ( LOG_LEVELS as readonly string[] ).includes( message.level ) && isString( message.event ) ) {
-					logger[message.level]( message.event, { ...message.data, worker: w.info.name, instance: w.info.instance } );
+					logger[message.level]( message.event, { ...message.data, worker } );
 				}
 				break;
 
@@ -753,43 +869,38 @@ export class Workers {
 		let refused = "no Tasks given to Workers";
 
 		try {
-			refused = tasks ? tasks.report( report, threadName( w.info ) ) : refused;
+			refused = tasks ? tasks.report( report, w.info.id ) : refused;
 		}
 		catch {
 			refused = "too many tasks";
 		}
 
 		if( refused ) {
-			logger.warn( "worker.task.refused", { worker: w.info.name, instance: w.info.instance, reason: refused } );
+			logger.warn( "worker.task.refused", { worker: w.info.id, reason: refused } );
 		}
 	}
 
-	private instances( name: string ): Running[] {
-		const list = this.running.get( name );
-		if( !list?.length ) {
-			throw new Error( `worker "${name}" is not running` );
-		}
-
-		return list;
-	}
-
-	// in turn among the instances
-	private pick( name: string ): Running {
-		const list = this.instances( name );
-		const turn = ( this.turns.get( name ) ?? 0 ) % list.length;
-		this.turns.set( name, turn + 1 );
-		return list[turn];
+	// every thread of every worker
+	private all( ): Running[] {
+		return [...this.groups.values( )].flatMap( g => g.threads );
 	}
 
 	private remove( w: Running ) {
-		const list = this.running.get( w.info.name );
-		const at = list?.indexOf( w ) ?? -1;
+		const { threads } = w.group;
+		const at = threads.indexOf( w );
 		if( at >= 0 ) {
-			list.splice( at, 1 );
+			threads.splice( at, 1 );
 		}
 
-		if( list && !list.length ) {
-			this.running.delete( w.info.name );
+		this.forget( w.group );
+	}
+
+	// a worker without thread left is not started any more: workers.get returns null,
+	// and its class and name may be started again
+	private forget( group: Group ) {
+		const { id } = group.handle;
+		if( !group.threads.length && this.groups.get( id ) === group ) {
+			this.groups.delete( id );
 		}
 	}
 }
