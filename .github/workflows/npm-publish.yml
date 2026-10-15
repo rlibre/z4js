@@ -37,6 +37,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # node:test, no dependency (scripts/test.ts): a failure stops the publication
+      - name: Tests
+        run: npm test
+
       - name: Publish to NPM
         run: |
             if [[ "${{ github.ref_name }}" == *-* ]]; then
