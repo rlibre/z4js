@@ -1,6 +1,6 @@
 {
 	"name": "@r-libre/z4js",
-	"version": "1.0.9",
+	"version": "1.0.10",
 	"description": "Backend framework: TypeScript sources, Postgres or SQLite, secure by design.",
 	"license": "MIT",
 	"author": "Etienne Cochard",
