@@ -41,6 +41,7 @@ jobs:
       - name: Tests
         run: npm test
 
+      # trusted publishing: npm authenticates this workflow through OIDC (id-token: write), no token
       - name: Publish to NPM
         run: |
             if [[ "${{ github.ref_name }}" == *-* ]]; then
@@ -48,8 +49,6 @@ jobs:
             else
                 npm publish --access public --provenance
             fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
