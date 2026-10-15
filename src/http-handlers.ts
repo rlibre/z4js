@@ -22,7 +22,7 @@
 
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { HttpError, statusText } from "./http-error";
-import type { Logger } from "./logger";
+import { Logger } from "./logger";
 import { LockError } from "./mutex";
 import { ShapeError } from "./shared/shape";
 import { errorCode, isIntNumber } from "./tools";
@@ -38,11 +38,17 @@ function clientStatus( err: unknown ): number {
 	return e?.expose === true && isIntNumber( e.status ) && e.status >= 400 && e.status < 500 ? e.status : 0;
 }
 
-export function createErrorHandler( logger: Logger ): ErrorRequestHandler {
-	return ( err, req, res, next ) => {
-		// the response has started: let Express close the connection
+export function createErrorHandler( ): ErrorRequestHandler {
+	// four parameters: that is how Express recognizes an error handler
+	return ( err, req, res, _next ) => {
+		// the response has started (an error after the answer, a broken download): logged,
+		// and an unfinished response is cut, as Express would (it would also write the
+		// error on the console)
 		if( res.headersSent ) {
-			next( err );
+			( req.log ?? Logger.app ).error( "http.error", { method: req.method, path: req.path, status: res.statusCode, answered: true, err } );
+			if( !res.writableEnded ) {
+				res.destroy( );
+			}
 			return;
 		}
 
@@ -82,7 +88,7 @@ export function createErrorHandler( logger: Logger ): ErrorRequestHandler {
 		const data = { method: req.method, path: req.path, status };
 
 		// the logger of the request carries its id (see server.ts)
-		const log = req.log ?? logger;
+		const log = req.log ?? Logger.app;
 
 		if( status >= 500 ) {
 			log.error( "http.error", { ...data, err } );

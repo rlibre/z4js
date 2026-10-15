@@ -21,23 +21,26 @@
 // by "*" (everything) or by "resource/*" (any action on the resource). The joker is
 // accepted at the end only, behind a "/": a "*/read" would otherwise grant everything.
 //
-// The application creates one Access and takes its functions, so that the handlers
-// keep their usual form:
+// The application creates one Access and gives it to its guarded groups, which check
+// the need of each route ( { need: "bed/read" } ). A handler may still check by itself:
 //
-//   export const { userHasAccess, noAccessCheck } = new Access( sql, { securityLog } );
+//   export const access = new Access( );
+//   RouteGroup.guarded( "/api", sessions.guard, access );
 //   ...
-//   if( !await userHasAccess( req.user, "bed/read" ) ) {
+//   if( !await access.userHasAccess( ctx.session.user, "bed/read" ) ) {
 //       throw new HttpError( 403 );
 //   }
 //
-// In debug mode, a handler of a guarded group that answers without any access check
-// is logged (see server.ts). The guard gives each request its own user object
-// (requestUser), on which userHasAccess and noAccessCheck leave a mark.
+// The guard gives each request its own user object (requestUser), which carries the
+// request id for the security log.
 
 import type { Db } from "./model";
 import { Model } from "./model";
-import type { SecurityLog } from "./logger";
+import type { Ctx, Handler } from "./context";
+import { HttpError } from "./http-error";
+import { SecurityLog } from "./logger";
 import { isSqlite } from "./sqlite";
+import type { SessionUser } from "./session";
 import { dropOldest, isArray, isString, isUUID } from "./tools";
 
 const CACHE_MS = 5000;
@@ -65,6 +68,12 @@ export class GroupsModel extends Model {
 
 		return Math.max( version, 1 );
 	}
+
+	// every group with its rights (a few rows: read whole)
+	async rightsByGroup( ): Promise<Map<string, string[]>> {
+		const rows = await this.db`select id, rights from groups`;
+		return new Map( rows.map( r => [String( r.id ), stringList( r.rights )] ) );
+	}
 }
 
 // the users table: login, groups and password hash (null for an account without
@@ -87,6 +96,34 @@ export class UsersModel extends Model {
 		}
 
 		return Math.max( version, 2 );
+	}
+
+	// the user as a session sees it, null if unknown
+	async get( id: string ): Promise<SessionUser> {
+		const [row] = await this.db`select id, login, grps from users where id = ${id}`;
+		return row ? { id: String( row.id ), login: String( row.login ), grps: stringList( row.grps ) } : null;
+	}
+
+	// the ids of the groups of the user, empty if unknown
+	async groupsOf( id: string ): Promise<string[]> {
+		const [row] = await this.db`select grps from users where id = ${id}`;
+		return stringList( row?.grps );
+	}
+
+	// for a local login: id and password hash (null without local password), null if unknown
+	async byLogin( login: string ): Promise<{ id: string, password: string }> {
+		const [row] = await this.db`select id, password from users where login = ${login}`;
+		return row ? { id: String( row.id ), password: isString( row.password ) ? row.password : null } : null;
+	}
+
+	// the password hash, null without local password or unknown user
+	async passwordOf( id: string ): Promise<string> {
+		const [row] = await this.db`select password from users where id = ${id}`;
+		return isString( row?.password ) ? row.password : null;
+	}
+
+	async setPassword( id: string, hash: string ): Promise<void> {
+		await this.db`update users set password = ${hash} where id = ${id}`;
 	}
 }
 
@@ -112,37 +149,70 @@ function stringList( v: unknown ): string[] {
 	return isArray( v ) ? v.filter( isString ).map( s => s.trim( ) ).filter( s => s ) : [];
 }
 
-// marks left on the user object of a request
-const CHECKED = Symbol( "z4js.access.checked" );
+// the request id, hidden on the user object of a request
+const REQUEST_ID = Symbol( "z4js.access.request" );
 
 // the user object of one request: a copy of the user (own properties, so that
-// res.json( req.user ) shows them), carrying the access check mark of this request
-// only. called by the guard
-export function requestUser<U extends object>( user: U ): U {
-	return { ...user };
+// ctx.json( ctx.session.user ) shows them), carrying the id of this request only
+// (hidden, for the security log). called by the guard
+export function requestUser<U extends object>( user: U, requestId?: string ): U {
+	const copy = { ...user };
+	Object.defineProperty( copy, REQUEST_ID, { value: requestId } );
+	return copy;
 }
 
-export function isAccessChecked( user: object ): boolean {
-	return Object.hasOwn( user, CHECKED );
+// the request id carried by the user object of a request, undefined otherwise
+function requestIdOf( user: unknown ): string {
+	return user && typeof user === "object" ? ( user as Record<symbol, string> )[REQUEST_ID] : undefined;
 }
 
-// the handler needs no right (GET /me...): says so, for the debug check
-export function noAccessCheck( user: unknown ): void {
-	markChecked( user );
-}
+// -- need -----------------------------------------------------------------------
 
-function markChecked( user: unknown ) {
-	if( user && typeof user === "object" ) {
-		Object.defineProperty( user, CHECKED, { value: true } );
+// the right(s) a route (HTTP or WebSocket) needs, checked before anything else of the
+// route (403 otherwise): one right, several (all of them), or a function for what rights
+// cannot say (the owner of a record...). checked with the Access of the group: guarded
+// groups only (a check without a session is a filter).
+// null: no right needed, said explicitly (required in every route)
+export type Need = string | readonly string[] | ( ( ctx: Ctx<any> ) => boolean | Promise<boolean> );
+
+// checked when a route is declared: need present (TypeScript lets null pass anywhere,
+// without strictNullChecks: the key itself is checked), a right, a non empty list of
+// rights, a function, or null
+export function checkNeed( key: string, options: { need?: Need } ) {
+	if( !options || !Object.hasOwn( options, "need" ) ) {
+		throw new Error( `route ${key}: need expected (null for no right)` );
 	}
+
+	const { need } = options;
+	const isRight = ( r: unknown ) => isString( r ) && r !== "";
+	if( need !== null && typeof need !== "function" && !isRight( need ) && !( isArray( need ) && need.length > 0 && need.every( isRight ) ) ) {
+		throw new Error( `invalid need for route ${key}` );
+	}
+}
+
+// the need of a route as its first step: 403 unless granted
+export function needStep( need: Need, access: Access ): Handler {
+	if( typeof need === "function" ) {
+		return async ( ctx: Ctx ) => {
+			if( !await need( ctx ) ) {
+				throw new HttpError( 403 );
+			}
+		};
+	}
+
+	const rights = isString( need ) ? [need] : need;
+	return async ( ctx: Ctx ) => {
+		// in order, the first refusal ends (logged once by userHasAccess)
+		for( const right of rights ) {
+			if( !await access.userHasAccess( ctx.session.user, right ) ) {
+				throw new HttpError( 403 );
+			}
+		}
+	};
 }
 
 // -- access ---------------------------------------------------------------------
 
-export interface AccessOptions {
-	// refusals are logged there (auth.forbidden), never in the database
-	securityLog?: SecurityLog;
-}
 
 type UserRef = string | { id: string };
 
@@ -151,35 +221,32 @@ function idOf( user: UserRef ): string {
 }
 
 // access control: tells whether a user has a right, from the rights of his groups.
-// one instance per application, its functions are taken out (see the header)
+// one instance per application, given to the guarded groups (see the header)
 export class Access {
 	private readonly users = new Map<string, { rights: Set<string>, expires: number }>( );
 	private groups: { rights: Map<string, string[]>, expires: number } = null;
+	private readonly groupsModel: GroupsModel;
+	private readonly usersModel: UsersModel;
 
 	// registers the models it reads (groups, users) if the application did not
-	constructor( private readonly db: Db, private readonly options: AccessOptions = {} ) {
-		Model.ensure( "groups", ( ) => new GroupsModel( ) );
-		Model.ensure( "users", ( ) => new UsersModel( ) );
+	constructor( ) {
+		this.groupsModel = Model.ensure( "groups", GroupsModel );
+		this.usersModel = Model.ensure( "users", UsersModel );
 	}
 
 	// arrow functions: they can be taken out of the object (see the header)
 
 	// true if the user has the right. the rights of a user are cached CACHE_MS
 	readonly userHasAccess = async ( user: UserRef, right: string ): Promise<boolean> => {
-		markChecked( user );
-
 		const id = idOf( user );
 		const granted = isUUID( id ) && rightMatches( await this.rightsOf( id ), right );
 
 		if( !granted ) {
-			this.options.securityLog?.log( "auth.forbidden", { user: isString( id ) ? id : null, right } );
+			SecurityLog.app.log( "auth.forbidden", { user: isString( id ) ? id : null, right }, requestIdOf( user ) );
 		}
 
 		return granted;
 	};
-
-	// the handler needs no right (GET /me...): says so, for the debug check
-	readonly noAccessCheck = noAccessCheck;
 
 	// the groups that the actor may not give: a group is given only if each of its
 	// rights is granted to the actor himself (nobody gives what he does not have).
@@ -202,11 +269,11 @@ export class Access {
 			return cached.rights;
 		}
 
-		const [user] = await this.db`select grps from users where id = ${id}`;
+		const grps = await this.usersModel.groupsOf( id );
 		const groups = await this.groupRights( );
 
 		const rights = new Set<string>( );
-		for( const gid of stringList( user?.grps ) ) {
+		for( const gid of grps ) {
 			groups.get( gid )?.forEach( r => rights.add( r ) );
 		}
 
@@ -224,9 +291,7 @@ export class Access {
 			return this.groups.rights;
 		}
 
-		const rows = await this.db`select id, rights from groups`;
-		const rights = new Map( rows.map( r => [String( r.id ), stringList( r.rights )] ) );
-
+		const rights = await this.groupsModel.rightsByGroup( );
 		this.groups = { rights, expires: now + CACHE_MS };
 		return rights;
 	}

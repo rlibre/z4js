@@ -1,11 +1,12 @@
 // Entry point of the demo: configuration, database, sessions, routes, workers, server.
 
 import { join } from "node:path";
-import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Tasks, Workers, serve, sqlite } from "@r-libre/z4js";
+import { Access, Config, ConfigError, Logger, Model, RouteGroup, SecurityLog, Sessions, Workers, serve, sqlite } from "@r-libre/z4js";
+import { startBackups } from "./backup";
 import { DemoConfig } from "./config";
-import { LiveChannel } from "./live";
-import { seed } from "./models";
+import { live } from "./live";
 import { MeEP, NotesEP } from "./notes";
+import { tasks } from "./tasks";
 
 let config: DemoConfig;
 try {
@@ -18,33 +19,31 @@ catch( e ) {
 }
 
 const logger = Logger.create( config.log );
-const securityLog = new SecurityLog( { file: config.securityLog.file } );
+SecurityLog.create( { file: config.securityLog.file } );
 
-const sql = sqlite( join( config.data, "demo.db" ) );
+// exclusive in production: one instance only (z4js keeps state in memory). not in
+// debug, so that the database can be opened in an SQL editor meanwhile
+const sql = sqlite( join( config.data, "demo.db" ), { exclusive: !config.debug } );
 
 // they register the models they read (users, groups, sessions): created before the migration
-const access = new Access( sql, { securityLog } );
-const sessions = new Sessions( sql, config.session, { rateLimit: config.rateLimit, securityLog } );
+const access = new Access( );
+const sessions = new Sessions( config.session, { rateLimit: config.rateLimit } );
 
-// every table created or migrated in one transaction (notesModel registered at the
-// import of models.ts), then the demo accounts
+// every table created or migrated in one transaction, the demo accounts with them
+// (models registered at the import of models.ts)
 await Model.updateAll( sql );
 await Model.validateAll( sql );
-await seed( sql );
 
 // the worker entry file is dist/workers.js, next to this one
-// the progress of the long tasks of the workers, followed by the clients on /api/tasks
-const tasks = new Tasks( );
+const workers = new Workers( { config, tasks } );
+// found again by the end points (Workers.get)
+await workers.start( "stats" );
 
-const workers = new Workers( { config, logger, tasks } );
-const stats = await workers.start( "stats" );
-await workers.start( "backup" );
-
-const live = new LiveChannel( );
+const stopBackups = startBackups( config );
 
 // every route of /api needs a session; /auth is open (login, refresh, logout, stepup)
-const api = RouteGroup.guarded( "/api", sessions.guard )
-	.add( "/notes", new NotesEP( { sql, access, sessions, live, stats, tasks } ) )
+const api = RouteGroup.guarded( "/api", sessions.guard, access )
+	.add( "/notes", new NotesEP( ) )
 	.add( "/me", new MeEP( ) )
 	.add( "/live", live )
 	.add( "/tasks", tasks );
@@ -54,10 +53,10 @@ const auth = RouteGroup.unprotected( "/auth" )
 
 await serve( {
 	config,
-	logger,
 	groups: [api, auth],
 	statics: [{ path: "/", folder: config.www }],
 	onStop: async ( ) => {
+		stopBackups( );
 		await workers.stop( );
 		await sql.end( );
 		logger.close( );

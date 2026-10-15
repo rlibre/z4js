@@ -11,6 +11,6 @@ export class DemoConfig extends Config {
 	// the web page
 	readonly www = this.folder( "www" );
 
-	// the backup worker copies the database that often (data/backup/demo.db)
+	// the database is copied that often (data/backup/demo.db, see backup.ts)
 	readonly backupMinutes = this.int( "backupMinutes", { def: 1, min: 1 } );
 }

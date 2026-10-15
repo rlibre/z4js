@@ -22,7 +22,7 @@
 //   class Mailer extends Worker {
 //       async onMessage( type: string, data: any ) { ... }      // its result answers a call
 //   }
-//   class Backup extends Worker {                              // runs until its stop
+//   class Poller extends Worker {                              // runs until its stop
 //       async onRun( ) {
 //           while( await this.wait( 3_600_000 ) ) { ... }      // false as soon as the worker stops
 //       }
@@ -44,7 +44,7 @@
 //
 // The main thread starts workers of these classes. Each one is an object it talks to:
 //
-//   const workers = new Workers( { config, logger } );
+//   const workers = new Workers( { config } );
 //   const mailer = await workers.start( "mailer" );                                  // mailer@mailer
 //   const render = await workers.start( "render", { instances: 4 } );                // render@render#0 .. #3
 //   const press = await workers.start( "autom", { name: "press", data: { ip } } );   // press@autom
@@ -54,7 +54,7 @@
 //   render.broadcast( "clear-cache" );                         // every instance
 //   const pdf = await render.call( "pdf", { id } );
 //   press.on( "alarm", ( data, from ) => ... );                // posted by the worker
-//   workers.get( "autom", "oven" ).post( "write", { ... } );   // found again by class and name
+//   Workers.get( "autom", "oven" ).post( "write", { ... } );   // found again by class and name, anywhere
 //   workers.list( );
 //   await workers.stop( );
 //
@@ -92,7 +92,8 @@ import { dirname, join } from "node:path";
 import { Worker as NodeWorker, isMainThread, parentPort, receiveMessageOnPort, workerData } from "node:worker_threads";
 import type { Config } from "./config";
 import { LOG_LEVELS } from "./logger";
-import type { Logger, LogLevel } from "./logger";
+import { Logger } from "./logger";
+import type { LogLevel } from "./logger";
 import { closeMutexes, mutexBuffers, releaseThread } from "./mutex";
 import type { MutexBuffers } from "./mutex";
 import type { TaskReport, Tasks } from "./tasks";
@@ -553,7 +554,6 @@ function workerId( cls: string, name: string ): string {
 
 export interface WorkersOptions {
 	config: Config;
-	logger: Logger;
 	// the entry file of the workers, default: workers.js next to the main script
 	file?: string;
 	// receives the progress of the tasks reported by the workers (tasks.ts)
@@ -603,7 +603,7 @@ interface Group {
 }
 
 // a started worker, seen from the main thread: the object the application talks to.
-// made by workers.start, found again by workers.get
+// made by workers.start, found again by Workers.get
 export class WorkerHandle {
 	// "name@class"
 	readonly id: string;
@@ -676,15 +676,31 @@ export class WorkerHandle {
 	}
 }
 
+// the Workers of the process, for Workers.get. a global on purpose: the workers are
+// threads of the process, unique by nature (like the names of the mutexes), and a
+// handler finds the one it calls without having it passed down from the main
+let current: Workers = null;
+
 // the workers seen from the main thread: starts them, finds them again, lists and
-// stops them
+// stops them. one per process
 export class Workers {
 	// by worker id
 	private readonly groups = new Map<string, Group>( );
 	private readonly file: string;
 
 	constructor( private readonly options: WorkersOptions ) {
+		if( current ) {
+			throw new Error( "Workers: one per process, already created" );
+		}
+
 		this.file = options.file ?? join( dirname( process.argv[1] ), "workers.js" );
+		current = this;
+	}
+
+	// the started worker of this class and name (without name: the one named like its
+	// class). null if it is not started, or ended
+	static get( cls: string, name = cls ): WorkerHandle {
+		return current?.groups.get( workerId( cls, name ) )?.handle ?? null;
 	}
 
 	// starts a worker of this registered class and resolves once it ran its onStart (each
@@ -725,12 +741,6 @@ export class Workers {
 		return handle;
 	}
 
-	// the worker of this class and name (without name: the one named like its class).
-	// null if it is not started, or ended
-	get( cls: string, name = cls ): WorkerHandle {
-		return this.groups.get( workerId( cls, name ) )?.handle ?? null;
-	}
-
 	list( ): WorkerInfo[] {
 		return this.all( ).map( w => ( { ...w.info } ) );
 	}
@@ -738,7 +748,7 @@ export class Workers {
 	// no new mutex, the held ones are released, then each worker runs its onStop.
 	// a worker still there after timeoutMs (config.server.shutdownMs) is terminated
 	async stop( timeoutMs = this.options.config.server.shutdownMs ): Promise<void> {
-		const { logger } = this.options;
+		const logger = Logger.app;
 
 		const held = await closeMutexes( timeoutMs );
 		if( held.length ) {
@@ -764,7 +774,8 @@ export class Workers {
 	}
 
 	private spawn( group: Group, instance: number, numbered: boolean, data: unknown ): Promise<void> {
-		const { config, logger } = this.options;
+		const { config } = this.options;
+		const logger = Logger.app;
 		const { handle } = group;
 		const id = numbered ? `${handle.id}#${instance}` : handle.id;
 		const start: StartData = { class: handle.class, name: handle.name, instance, id, data, config, mutexes: mutexBuffers( ) };
@@ -815,7 +826,7 @@ export class Workers {
 	}
 
 	private receive( w: Running, message: ToMain, ready: ( ) => void ) {
-		const { logger } = this.options;
+		const logger = Logger.app;
 		const worker = w.info.id;
 
 		switch( message.k ) {
@@ -865,7 +876,8 @@ export class Workers {
 
 	// a progress report: passed to the Tasks, refused if it is not theirs
 	private task( w: Running, report: TaskReport ) {
-		const { logger, tasks } = this.options;
+		const { tasks } = this.options;
+		const logger = Logger.app;
 		let refused = "no Tasks given to Workers";
 
 		try {
@@ -895,7 +907,7 @@ export class Workers {
 		this.forget( w.group );
 	}
 
-	// a worker without thread left is not started any more: workers.get returns null,
+	// a worker without thread left is not started any more: Workers.get returns null,
 	// and its class and name may be started again
 	private forget( group: Group ) {
 		const { id } = group.handle;

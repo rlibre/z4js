@@ -43,7 +43,8 @@ serve                  the HTTP(S) server, WebSockets, statics, clean stop
 
 ```
 Config                      the configuration: its readonly fields are the schema of the file
-EndPoints                   notes HTTP routes, reads request values (paramValue, bodyValue, queryValue)
+EndPoints                   notes HTTP routes (handler, need, filters)
+Ctx                         context of one request: reads its values, sends the answer
 Channel                     notes WebSocket endpoints
 RouteGroup                  a prefix, its end points and channels, guarded or unprotected
 Model                       migration and validation of one part of the database
@@ -127,39 +128,84 @@ Notes routes; touches neither Express nor the configuration. Mounted by a `Route
 
 ```ts
 type Method = "get" | "post" | "put" | "patch" | "delete"
-type Handler = (req: Request, res: Response) => unknown   // may be async
-interface RouteOptions { filter?: RequestHandler | RequestHandler[] }   // run before the handler
+type Handler = (ctx: Ctx<any>) => unknown                 // may be async
+type Need = string | readonly string[] | ((ctx: Ctx<any>) => boolean | Promise<boolean>)   // null: no right
+type Filter = (ctx: Ctx<any>) => unknown                  // may be async, refuses by throwing an HttpError, never answers (throws)
+interface RouteOptions {
+  need: Need                            // REQUIRED. right(s) checked by the Access of the group (all of them), a function (false: 403), or null (no right)
+  filter?: Filter | readonly Filter[]   // run after need, before the handler
+}
 
 class EndPoints {
   get routes(): readonly RouteDef[]
-  get(url: string, handler: Handler, options?: RouteOptions): void
-  post(url: string, handler: Handler, options?: RouteOptions): void
-  put(url: string, handler: Handler, options?: RouteOptions): void
-  patch(url: string, handler: Handler, options?: RouteOptions): void
-  del(url: string, handler: Handler, options?: RouteOptions): void
-  protected route(method: Method, url: string, handler: Handler, options?: RouteOptions): void
-
-  paramValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]  // /item/:id
-  bodyValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]   // JSON body member
-  queryValue<K extends ArgType = "string">(req: Request, name: string, type?: K, mode?: ValueType): ArgTypes[K]  // ?a=1
-  filesOf<F extends string>(req: Request, spec: Record<F, FileSpec>, options?: FilesOptions): Promise<Record<F, UploadedFile>>  // multipart
+  get(url: string, handler: Handler, options: RouteOptions): void
+  post(url: string, handler: Handler, options: RouteOptions): void
+  put(url: string, handler: Handler, options: RouteOptions): void
+  patch(url: string, handler: Handler, options: RouteOptions): void
+  del(url: string, handler: Handler, options: RouteOptions): void
+  protected route(method: Method, url: string, handler: Handler, options: RouteOptions): void
 }
 ```
 
-- Handlers are methods given unbound (`this.get( "/all", this.on_all )`): they run with the `EndPoints` object as `this`.
+- Handlers are methods given unbound (`this.get( "/all", this.on_all, { need: "notes/read" } )`): they run with the `EndPoints` object as `this`, and receive the context of the request.
+- Order of a request: guard of the group (401) → `need` (403) → filters → handler. A step that throws ends the request.
+- `need` is required in every route (`{ need: null }` for no right): a route without it is refused at its declaration. In an unprotected group `need` is `null`, even for a function: a check without a session (webhook signature...) is a filter. Anything else there is refused at startup (`add`). An empty list or an empty right is refused at declaration.
 - Paths: segments are literals or `:name`. No wildcard, no optional part, no regex, no `.` or `..`. Compared case-insensitively. A duplicate route throws.
 - A bad or missing value is a 400 that names the parameter, never its value.
+
+## `Ctx` (`src/context.ts`)
+
+The only thing a handler receives. Express `req` and `res` are not reachable.
+
+```ts
+interface Binary { }                                // marker: binary answer
+type RequestSession = Readonly<{ id: string; user: SessionUser; stepUpUntil: number }>
+
+class Ctx<T = unknown> {                            // T: type of the JSON answer (Ctx alone: not typed)
+  // request
+  get session(): RequestSession                     // set by the guard, null in an unprotected group
+  get ip(): string                                  // follows X-Forwarded-For only with trustProxy
+  get rawBody(): unknown                            // decoded JSON body (the text fields after filesOf)
+  header(name: string): string
+
+  // values: a bad or missing value is a 400 that names the parameter, never its value
+  // same two signatures for each: /item/:id, JSON body member, ?a=1
+  paramValue<const V extends readonly string[]>(name: string, type: "enum", mode: EnumMode<V>): V[number]   // values required
+  paramValue<K extends Exclude<ArgType, "enum"> = "string">(name: string, type?: K, mode?: ValueType): ArgTypes[K]
+  bodyValue(...): ...
+  bodyValue<T>(name: string, type: "object", mode: ShapeMode<T>): T          // bodyValue only: checked and typed by the Shape
+  bodyValue<T>(name: string, type: "object[]", mode: ShapeMode<T>): T[]      // each item, maxitems applies
+  queryValue(...): ...
+  filesOf<F extends string>(spec: Record<F, FileSpec>, options?: FilesOptions): Promise<Record<F, UploadedFile>>  // multipart
+
+  // answer
+  status(code: number): this
+  addHeader(name: string, value: string): this
+  json(value: T): void
+  ok(): void                                                                // 200 {}
+  send(this: Ctx<Binary>, data: Buffer | Uint8Array | string, contentType: string): void
+  download(this: Ctx<Binary>, path: string, name: string): Promise<void>  // absolute path; missing file: 404
+}
+```
+
+- `Ctx` is invariant in `T`: `send` and `download` exist only for `Ctx<Binary>`, which cannot `json`.
+- Nothing sent by the handler: z4js answers the status set by `status` with an empty body; without status a 200, and `http.empty` in the log in debug.
+- Answering twice throws.
 
 ### `ArgTypes` / `ValueType` (`src/params.ts`)
 
 ```ts
 interface ArgTypes {
   "string": string;  "number": number;  "integer": number;  "boolean": boolean
-  "array": any[];    "object": Record<string, any>;  "any": any
-  "uuid": UUID;      "date": Date;  "sql-date": Date;  "sql-datetime": Date
+  "object": Record<string, any>;  "any": any;  "uuid": UUID;  "enum": string   // the union of its values, see EnumMode
+  "date": Date;  "sql-date": Date;  "sql-datetime": Date
   "time": string     // HH:MM or HH:MM:SS
+  "string[]": string[];  "number[]": number[];  "integer[]": number[];  "uuid[]": UUID[];  "boolean[]": boolean[];  "object[]": Record<string, any>[]
 }
 type ArgType = keyof ArgTypes
+
+type EnumMode<V extends readonly string[]> = ValueType & { values: V }   // the options of an "enum"
+type ShapeMode<T> = ValueType & { shape: ObjectValidator<T> }            // an "object" / "object[]" of the body checked by a Shape: only its fields are kept; a refusal is a 400 naming the member and the field
 
 interface ValueType {
   required?: boolean     // default true
@@ -171,11 +217,13 @@ interface ValueType {
   minval?: number        // numbers
   maxval?: number        // numbers
   utc?: boolean          // sql-date, sql-datetime
+  values?: readonly string[]   // enum: the accepted values (required by EnumMode); the result is their union, no `as const`
+  maxitems?: number      // arrays: 100 by default, more = 400
   validator?: (data: unknown) => boolean   // last check, on the converted value (each item for arrays)
 }
 ```
 
-Conversions are tolerant (URL values are strings: `"12"` is an integer, `"yes"`/`"1"` a boolean, `?a=1` an array of one); checks are strict. `uuid` is returned lowercase. `date` accepts ISO text or a millisecond timestamp.
+Conversions are tolerant (URL values are strings: `"12"` is an integer, `"yes"`/`"1"` a boolean, `?a=1` an array of one, `?a=1&a=2` an array of two); checks are strict, each item of an array with the options. No comma separated lists. `uuid` is returned lowercase. `date` accepts ISO text or a millisecond timestamp.
 
 ---
 
@@ -197,12 +245,13 @@ class UploadedFile {
 ```
 
 ```ts
-async on_import( req: Request, res: Response ) {
-  await this.need( req, "notes/create" )                     // before reading a byte
-  const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } )
-  const comment = this.bodyValue( req, "comment", "string", { required: false } )   // text fields: req.body
+this.post( "/import", this.on_import, { need: "notes/create" } )   // checked before reading a byte
+
+async on_import( ctx: Ctx<{ id: string }> ) {
+  const { data } = await ctx.filesOf( { data: { maxBytes: 1_000_000, types: ["text/csv"] } } )
+  const comment = ctx.bodyValue( "comment", "string", { required: false } )   // the text fields
   await data.keep( join( config.data, "imports", data.id ) )   // else deleted at the end of the request
-  res.status( 201 ).json( { id: data.id } )
+  ctx.status( 201 ).json( { id: data.id } )
 }
 ```
 
@@ -218,7 +267,7 @@ async on_import( req: Request, res: Response ) {
 ```ts
 class RouteGroup {
   readonly prefix: string
-  static guarded(prefix: string, guard: RequestHandler): RouteGroup   // every route behind the guard
+  static guarded(prefix: string, guard: RequestHandler, access: Access): RouteGroup   // every route behind the guard; access checks the needs
   static unprotected(prefix: string): RouteGroup                      // no control at all
   add(path: string, target: EndPoints | Channel): this         // "/" = the prefix itself
   list(): RouteInfo[]                                                 // whole exposed surface
@@ -240,7 +289,6 @@ function serve(options: ServeOptions): Promise<RunningServer>
 
 interface ServeOptions {
   config: Config
-  logger: Logger
   groups: readonly RouteGroup[]
   statics?: readonly StaticFolder[]   // { path: "/", folder: config.www }: never protected, dot files ignored
   handleSignals?: boolean             // SIGTERM / SIGINT, default true
@@ -249,7 +297,7 @@ interface ServeOptions {
 interface RunningServer { readonly server: Server; close(): Promise<void> }
 ```
 
-Express `Request` gains: `id: string`, `log: Logger` (child logger carrying the request id), `user?: any` (set by the guard), `session?: { id: string; stepUpUntil: number }`.
+Express `Request` gains (internal to z4js, see `Ctx`): `id: string`, `log: Logger` (child logger carrying the request id), `session?: { id: string; user: SessionUser; stepUpUntil: number }` (set by the guard).
 
 What `serve` does: HTTPS if `tls.cert`, `trust proxy` from the config, no `X-Powered-By`, strict `express.json` limited to `bodyLimit`, timeouts, `nosniff` everywhere, HSTS under TLS, `no-store` on the groups, CORS by whitelist without credentials, `X-Request-Id`, one log line per request once answered (`http.request`, `http.slow`, `http.aborted`), global API rate limit, 404 and error handlers, WebSocket upgrades, clean stop.
 
@@ -278,11 +326,11 @@ interface WSHandler {
   onMessage: WSMessageHandler
   onClose?(socket: WSocket, code: number): unknown
 }
-interface WSOptions { maxPayload?: number }
+interface WSOptions { need: Need; maxPayload?: number }   // need required, as for an HTTP route
 
 class Channel {
   get routes(): readonly WSRouteDef[]
-  route(path: string, handler: WSHandler | WSMessageHandler, options?: WSOptions): void
+  route(path: string, handler: WSHandler | WSMessageHandler, options: WSOptions): void
 }
 
 class WSocket {
@@ -303,6 +351,7 @@ class WSData {
 
 - Paths have no parameter. Handlers are bound to the channel.
 - Guarded group: the client `POST`s on the endpoint path (with `Authorization`) and receives `{ ticket }`, then opens `ws(s)://host/path?ticket=...` within one second. The ticket is one-time, bound to the endpoint and the user.
+- Every endpoint declares `need` (required, `null` for no right). In a guarded group it is checked by the ticket `POST` (no right: 403, no ticket, no socket); in an unprotected group only `null` is accepted. Rights are checked at the opening only.
 - Messages of one socket are processed one at a time, in order (above 100 waiting: close 1008). A handler error closes with 1011 and is logged. Ping every 30 s.
 
 ---
@@ -311,14 +360,16 @@ class WSData {
 
 ```ts
 interface Db { <T extends readonly object[] = Record<string, any>[]>(strings: TemplateStringsArray, ...values: any[]): PromiseLike<T> }
-interface DbRoot extends Db { begin<R>(fn: (db: Db) => Promise<R>): Promise<unknown> }
+interface DbTx extends Db { savepoint<R>(fn: (db: DbTx) => Promise<R>): Promise<unknown> }
+interface DbRoot extends Db { begin<R>(fn: (db: DbTx) => Promise<R>): Promise<unknown> }
 
-class Model {
+class Model<D extends Db = Db> {               // D: type of this.db (SqliteDb: the connection or a transaction)
   readonly modelName: string
   readonly priority: number               // lower migrates first
   constructor(modelName: string, priority?: number)
 
-  static ensure(modelName: string, create: () => Model): Model
+  static ensure<M extends Model<any>>(modelName: string, cls: new () => M): M   // the registered one (must be a cls), else a new cls
+  static transaction<R>(fn: () => Promise<R>): Promise<R>   // every query made from fn belongs to it; nested: a savepoint
   static updateAll(sql: DbRoot, options?: MigrateOptions): Promise<void>
   static checkAll(sql: DbRoot, options?: MigrateOptions): Promise<MigrateFailure>   // dry run, rolled back
   static validateAll(sql: Db): Promise<void>
@@ -326,6 +377,7 @@ class Model {
   onMigrate(db: Db, version: number): Promise<number>   // stored version (0 the first time) -> new one, never lower
   onValidate(db: Db): Promise<void>                     // throw on a mismatch
 
+  protected get db(): D                   // the transaction in progress, else the connection given to updateAll (throws before)
   protected hasTable(db: Db, table: string): Promise<boolean>
   protected hasField(db: Db, table: string, field: string): Promise<boolean>
   protected fieldType(db: Db, table: string, field: string): Promise<string>
@@ -339,8 +391,12 @@ function isInfraError(e: unknown): boolean
 ```
 
 - Every model migrates in one transaction. Versions are stored in the table `__versions`.
+- Single instance: z4js keeps state in memory (sessions, rate limits, tickets, tasks, mutexes). With Postgres, `updateAll` first takes an advisory lock (keys: a z4js constant and the hash of `current_schema( )`) on a connection reserved for the life of the process (`sql.reserve( )`, postgres.js 3.4+): a second instance on the same schema fails to start ("another instance of the application uses this database"). Released when the process ends, even on a crash. `checkAll` does not take it.
 - `onMigrate` runs at every start and inspects the real state of the database (`hasTable`, `hasField`...). No numbered migration files.
 - Models are global instances created at the import of their file. A model created after `Model.updateAll` throws.
+- Nothing started in a `Model.transaction` may outlive it (promise not awaited, timer): `this.db` refuses it with a clear error.
+- A model is the only access to its data: its queries are its methods (`this.db`), the end points, channels and workers import the model and call them. No SQL anywhere else, no `sql.begin` anywhere: transactions are opened with `Model.transaction`, and the models see them without any parameter. During `onMigrate`, `this.db` is the migration transaction (same as its `db` parameter).
+- Initial data (demo accounts, reference rows) is written by a model in its `onMigrate`, never by the main.
 - Built-in priorities: `GroupsModel` 10, `UsersModel` 20, `SessionsModel` 30 (application models after them).
 
 ---
@@ -351,15 +407,19 @@ Same style as postgres.js. Values are always bound, never written into the SQL t
 
 ```ts
 function sqlite(path: string, options?: SqliteOptions): SqliteSql
-interface SqliteOptions { readOnly?: boolean; busyTimeout?: number; cacheSize?: number /*100*/; maxTransactionMs?: number /*30 000, 0 = none*/ }
+interface SqliteOptions { readOnly?: boolean; busyTimeout?: number; cacheSize?: number /*100*/; maxTransactionMs?: number /*30 000, 0 = none*/; exclusive?: boolean }
+// exclusive: the only connection to the file (single instance): its lock is taken at the opening and held until end( ).
+// a second instance fails to open, any other connection (SQL editor, a worker) fails. typically { exclusive: !config.debug }
 
-interface SqliteSql {
+interface SqliteDb {                               // the connection or a transaction: what a model sees (Model<SqliteDb>)
   <T extends readonly object[] = Row[]>(strings: TemplateStringsArray, ...values: unknown[]): Query<T>
   (value: unknown, ...columns: string[]): Helper     // identifier, in ( ), insert / update / select lists
+}
+interface SqliteSql extends SqliteDb {
   begin<R>(fn: (tx: SqliteTx) => R | Promise<R>, options?: BeginOptions): Promise<R>
   end(): Promise<void>
 }
-interface SqliteTx { /* same call signatures */ savepoint<R>(fn: (tx: SqliteTx) => R | Promise<R>): Promise<R> }
+interface SqliteTx extends SqliteDb { savepoint<R>(fn: (tx: SqliteTx) => R | Promise<R>): Promise<R> }
 
 type Result<T> = T & { count: number; lastInsertRowid: number | bigint }
 const TX_TIMEOUT_CODE = "SQLITE_TX_TIMEOUT"
@@ -374,8 +434,10 @@ await sql`update notes set ${sql( changes, "title", "text" )} where id = ${id}`
 await sql`select * from notes where id in ${sql( ids )}`
 await sql`select ${sql( ["id", "title"] )} from ${sql( "notes" )}`   // a string is an identifier
 const { count } = await sql`delete from notes where id = ${id}`
-await sql.begin( async tx => { await tx`...`; await tx.savepoint( async sp => { ... } ) } )
+await sql.begin( async tx => { await tx`...`; await tx.savepoint( async sp => { ... } ) } )   // used by Model.transaction
 ```
+
+These calls are written in the methods of the models, on `this.db`. An application opens its transactions with `Model.transaction`, never with `sql.begin`.
 
 - One connection: queries made outside a running transaction wait (FIFO). Using the root `sql` inside a transaction throws instead of blocking.
 - Written: boolean → 0/1, Date → ISO text, object/array → JSON. Read back by declared column type (`boolean`, `date`/`datetime`/`timestamp`, `json`). Integers beyond `Number.MAX_SAFE_INTEGER` are refused.
@@ -391,22 +453,16 @@ Postgres: use postgres.js directly; its `sql` fits `Db` / `DbRoot`.
 type UserRef = string | { id: string }
 
 class Access {
-  constructor(db: Db, options?: AccessOptions)          // registers GroupsModel and UsersModel
+  constructor()                                        // registers GroupsModel and UsersModel (reads its data through them)
   readonly userHasAccess: (user: UserRef, right: string) => Promise<boolean>
-  readonly noAccessCheck: (user: unknown) => void       // "this handler needs no right"
   readonly ungrantableGroups: (actor: UserRef, groupIds: readonly string[]) => Promise<string[]>  // groups the actor cannot give
 }
-interface AccessOptions { securityLog?: SecurityLog }
-
-function rightMatches(rights: ReadonlySet<string>, right: string): boolean
-function requestUser<U extends object>(user: U): U
-function isAccessChecked(user: object): boolean
-function noAccessCheck(user: unknown): void
 ```
 
 - Rights are `"resource/action"`. Granted by the same right, by `"resource/*"`, or by `"*"`. The joker is accepted at the end only.
 - Rights are cached 5 s per user (1000 users at most). Refusals go to the SecurityLog (`auth.forbidden`).
-- Debug mode: a successful answer of a guarded route without `userHasAccess` or `noAccessCheck` logs `access.unchecked`.
+- The `Access` is given to the guarded groups, which check the `need` of their routes with it.
+- Refusals carry the request id (hidden by the guard on the user object of the request).
 
 ---
 
@@ -414,10 +470,10 @@ function noAccessCheck(user: unknown): void
 
 ```ts
 class Sessions {
-  constructor(db: Db, settings: SessionSettings, options: SessionOptions)   // registers UsersModel and SessionsModel
+  constructor(settings: SessionSettings, options: SessionOptions)   // registers UsersModel and SessionsModel (reads its data through them)
   readonly endPoints: EndPoints            // /login /refresh /logout /stepup: mount in an unprotected group
-  readonly guard: RequestHandler             // sets req.user (SessionUser) or answers 401
-  readonly stepUp: RequestHandler            // route filter: 403 "step-up required" without recent confirmation
+  readonly guard: RequestHandler             // group guard: sets the session of the request (ctx.session) or answers 401
+  static readonly stepUp: Filter             // route filter (Sessions.stepUp): 403 "step-up required" without recent confirmation
   readonly loginLimiter: RateLimiter
   readonly refreshLimiter: RateLimiter
 
@@ -427,14 +483,14 @@ class Sessions {
   readonly logout: (refreshToken: string) => Promise<void>
   readonly revokeUser: (userId: string) => Promise<void>
   readonly loginBlockedFor: (login: string) => number              // ms to wait, 0 if allowed
-  readonly grantStepUp: (req: Request) => Promise<void>            // identity checked by the application
-  readonly stepUpWith: (req: Request, method: string) => Promise<boolean>
+  readonly grantStepUp: (ctx: Ctx) => Promise<void>                // identity checked by the application
+  readonly stepUpWith: (ctx: Ctx, method: string) => Promise<boolean>
 }
 
 interface SessionSettings { accessMinutes: number; refreshMinutes: number; maxPerUser: number; stepUpMinutes: number }  // config.session
 interface SessionRateLimits { loginPerMinute: number; loginFailures: number; loginFailureMinutes: number; refreshPerMinute: number }  // config.rateLimit
-interface SessionOptions { rateLimit: SessionRateLimits; securityLog?: SecurityLog; stepUpVerifiers?: Record<string, StepUpVerifier> }
-type StepUpVerifier = (user: SessionUser, req: Request) => Promise<boolean>
+interface SessionOptions { rateLimit: SessionRateLimits; stepUpVerifiers?: Record<string, StepUpVerifier> }   // security events: SecurityLog.app
+type StepUpVerifier = (user: SessionUser, ctx: Ctx) => Promise<boolean>   // reads its proof with ctx.bodyValue
 interface SessionUser { id: string; login: string; grps: string[] }
 interface SessionTokens { access: string; refresh: string; accessExpiresIn: number; refreshExpiresIn: number }
 ```
@@ -472,11 +528,11 @@ class RateLimiter {
   hit(key: string): number        // ms to wait, 0 if allowed
   waitFor(key: string): number
   reset(key: string): void
-  readonly filter: RequestHandler // route filter keyed on req.ip: 429 + Retry-After
+  readonly filter: Filter         // route filter keyed on ctx.ip: 429 + Retry-After
 }
 ```
 
-In memory, fixed window, 10 000 keys at most. `req.ip` follows `X-Forwarded-For` only with `trustProxy`.
+In memory, fixed window, 10 000 keys at most. `ctx.ip` follows `X-Forwarded-For` only with `trustProxy`.
 
 ---
 
@@ -522,7 +578,7 @@ Main side:
 
 ```ts
 class Workers {
-  constructor(options: WorkersOptions)                 // { config, logger, file?, tasks? }
+  constructor(options: WorkersOptions)                 // { config, file?, tasks? }; logs with Logger.app
   start(cls: string, options?: StartOptions): Promise<WorkerHandle>   // a worker of this registered class
   get(cls: string, name?: string): WorkerHandle        // found again by class and name, null if not started or ended
   list(): WorkerInfo[]
@@ -554,27 +610,27 @@ const oven = await workers.start( "autom", { name: "oven", data: { ip } } )     
 
 press.post( "write", { address: 12, value: 1 } )
 const pdf = await render.call( "pdf", { id } )
-workers.get( "autom", "oven" ).post( "write", { ... } )
+Workers.get( "autom", "oven" ).post( "write", { ... } )   // anywhere: a handler finds its worker
 ```
 
 - A worker is a class and a name. Without `name` it is named like its class, so a class can then be started once.
 - The instances of a worker are interchangeable: `post` and `call` take one in turn, none can be addressed. What must be addressed (one automaton, one device) is a worker of its own, with its name.
 - The id is `name@class`; an instance adds `#n` when the worker was started with `instances`. It is the name of the thread in the debugger and the `worker` field of its log lines. A class or a name holds no `@`, `#` nor space.
-- `Workers` has no `post`, `call`, `broadcast` nor `on`: only the `WorkerHandle` talks. Keep the object given by `start` (pass it to the `EndPoints` that use it), or find it again with `get`.
-- A handle whose worker ended throws (`not running`), `get` returns `null`, and the same class and name may be started again.
+- `Workers` has no `post`, `call`, `broadcast` nor `on`: only the `WorkerHandle` talks. One `Workers` per process (a second one throws): a handler finds a worker with the static `Workers.get( class, name? )` (`null` if not started: answer 503), never with a handle passed down from the main.
+- A handle whose worker ended throws (`not running`), `Workers.get` returns `null`, and the same class and name may be started again.
 
 Lifecycle: `onStart`, then the messages (one at a time, in order) and `onRun` beside them. `workers.start` resolves after `onStart`, without waiting for `onRun`. The stop fires `signal` at once, waits for the end of `onRun`, then runs `onStop`. An error that ends `onRun` is logged (`worker.run.failed`) and ends the worker.
 
 A periodic task:
 
 ```ts
-class Backup extends Worker {
+class Poller extends Worker {
   async onRun( ) {
     while( await this.wait( 60_000 ) ) {
       ...
     }
   }
-  onMessage( type: string ) { throw new Error( `backup: unknown message "${type}"` ) }
+  onMessage( type: string ) { throw new Error( `poller: unknown message "${type}"` ) }
 }
 ```
 
@@ -629,13 +685,13 @@ const MAX_TASK_TEXT = 256
 ```ts
 // main
 const tasks = new Tasks( )
-const workers = new Workers( { config, logger, tasks } )
-const api = RouteGroup.guarded( "/api", sessions.guard ).add( "/tasks", tasks )
+const workers = new Workers( { config, tasks } )
+const api = RouteGroup.guarded( "/api", sessions.guard, access ).add( "/tasks", tasks )
 
 // handler (importer: the object given by workers.start( "import" ))
-const task = tasks.create( req.user )
+const task = tasks.create( ctx.session.user )
 importer.post( "run", { task, file } )
-res.status( 202 ).json( { task } )
+ctx.status( 202 ).json( { task } )
 
 // worker
 const progress = this.progress( data.task )       // "start"
@@ -679,7 +735,8 @@ const LOG_LEVELS = ["debug", "info", "warn", "error", "fatal"] as const
 type LogLevel = (typeof LOG_LEVELS)[number]
 
 class Logger {
-  static create(options: LoggerOptions): Logger       // { level, file?, mode? }, file null = stdout
+  static create(options: LoggerOptions): Logger       // { level, file?, mode? }, file null = stdout. once per process (by the main)
+  static get app(): Logger                            // the logger of the application, read by z4js and the application (throws before create)
   child(requestId: string): Logger
   debug(event: string, data?: Record<string, unknown>): void
   info(event: string, data?: Record<string, unknown>): void
@@ -694,7 +751,8 @@ const SECURITY_EVENTS = ["auth.login.ok", "auth.login.failed", "auth.unauthorize
   "auth.ticket.refused", "auth.rights.changed"] as const
 
 class SecurityLog {
-  constructor(options?: SecurityLogOptions)           // { file?, mode?, extraEvents? }
+  static create(options?: SecurityLogOptions): SecurityLog   // { file?, mode?, extraEvents? }. once per process, by the main (required)
+  static get app(): SecurityLog                       // read by Access and Sessions (throws before create)
   log(event: string, data?: Record<string, unknown>, requestId?: string): void   // unknown event: throws
   close(): void
 }
@@ -804,26 +862,26 @@ catch( e ) {
 }
 
 const logger = Logger.create( config.log )
-const securityLog = new SecurityLog( { file: config.securityLog.file } )
+SecurityLog.create( { file: config.securityLog.file } )
 const sql = sqlite( join( config.data, "app.db" ) )
 
-const access = new Access( sql, { securityLog } )
-const sessions = new Sessions( sql, config.session, { rateLimit: config.rateLimit, securityLog } )
+const access = new Access( )
+const sessions = new Sessions( config.session, { rateLimit: config.rateLimit } )
 
 await Model.updateAll( sql )
 await Model.validateAll( sql )
 
-const workers = new Workers( { config, logger } )
-const stats = await workers.start( "stats" )      // given to the EndPoints that call it
+const workers = new Workers( { config } )
+await workers.start( "stats" )                    // found by the end points with Workers.get
 
-const api = RouteGroup.guarded( "/api", sessions.guard )
-  .add( "/notes", new NotesEP( { sql, access } ) )
+const api = RouteGroup.guarded( "/api", sessions.guard, access )
+  .add( "/notes", new NotesEP( ) )
 
 const auth = RouteGroup.unprotected( "/auth" )
   .add( "/", sessions.endPoints )
 
 await serve( {
-  config, logger,
+  config,
   groups: [api, auth],
   statics: [{ path: "/", folder: config.www }],
   onStop: async ( ) => {
@@ -855,38 +913,32 @@ export class AppConfig extends Config {
 
 ```ts
 import { EndPoints, HttpError } from "@r-libre/z4js"
-import type { Access, Request, Response, SqliteSql } from "@r-libre/z4js"
+import type { Ctx } from "@r-libre/z4js"
+import { notesModel } from "./models"
+import type { Note } from "./models"
 
 // the routes of the notes
 export class NotesEP extends EndPoints {
-  constructor( private readonly deps: { sql: SqliteSql, access: Access } ) {
+  constructor( ) {
     super( )
-    this.get( "/item/:id", this.on_item )
-    this.post( "/create", this.on_create )
+    this.get( "/item/:id", this.on_item, { need: "notes/read" } )
+    this.post( "/create", this.on_create, { need: "notes/create" } )
   }
 
   // one note
-  async on_item( req: Request, res: Response ) {
-    await this.need( req, "notes/read" )
-    const id = this.paramValue( req, "id", "uuid" )
-    const [note] = await this.deps.sql`select * from notes where id = ${id}`
+  async on_item( ctx: Ctx<Note> ) {
+    const id = ctx.paramValue( "id", "uuid" )
+    const note = await notesModel.get( id )
     if( !note ) {
       throw new HttpError( 404, "unknown note" )
     }
-    res.json( note )
+    ctx.json( note )
   }
 
-  async on_create( req: Request, res: Response ) {
-    await this.need( req, "notes/create" )
-    const title = this.bodyValue( req, "title", "string", { maxlength: 100, trim: true } )
+  async on_create( ctx: Ctx<{ id: string }> ) {
+    const title = ctx.bodyValue( "title", "string", { maxlength: 100, trim: true } )
     ...
-    res.status( 201 ).json( { id } )
-  }
-
-  private async need( req: Request, right: string ) {
-    if( !await this.deps.access.userHasAccess( req.user, right ) ) {
-      throw new HttpError( 403 )
-    }
+    ctx.status( 201 ).json( { id } )
   }
 }
 ```
@@ -895,10 +947,10 @@ export class NotesEP extends EndPoints {
 
 ```ts
 import { Model } from "@r-libre/z4js"
-import type { Db } from "@r-libre/z4js"
+import type { Db, SqliteDb } from "@r-libre/z4js"
 
-// the notes table
-export class NotesModel extends Model {
+// the notes table and its queries
+export class NotesModel extends Model<SqliteDb> {
   constructor( ) {
     super( "notes", 40 )    // after users (20)
   }
@@ -911,6 +963,18 @@ export class NotesModel extends Model {
       await db`alter table notes add column author text`
     }
     return Math.max( version, 2 )
+  }
+
+  // null if unknown
+  async get( id: string ): Promise<Note> {
+    const [note] = await this.db`select * from notes where id = ${id}` as Note[]
+    return note ?? null
+  }
+
+  async add( title: string, author: string ): Promise<string> {
+    const note = { id: randomUUID( ), title, author, created: new Date( ) }
+    await this.db`insert into notes ${this.db( note )}`
+    return note.id
   }
 }
 
@@ -933,7 +997,7 @@ export class LiveChannel extends Channel {
       onOpen: socket => { this.sockets.add( socket ) },
       onMessage: ( ) => { },
       onClose: socket => { this.sockets.delete( socket ) },
-    } )
+    }, { need: "notes/read" } )      // checked before the ticket is given
   }
 
   notify( event: object ) {
@@ -1059,17 +1123,17 @@ The second alias replaces `mime-db` (loaded by Express through mime-types: 2522 
 
 ## Important notes for AI
 
-- Never read a request value directly (`req.body.x`, `req.params.id`, `req.query.q`): use `paramValue`, `bodyValue`, `queryValue`. Files: `filesOf`, never another multipart parser.
-- Every handler of a guarded group calls `userHasAccess` or `noAccessCheck`. In debug mode, forgetting it logs `access.unchecked`.
+- A handler receives only `ctx: Ctx<T>`: read with `ctx.paramValue`, `ctx.bodyValue`, `ctx.queryValue`, files with `ctx.filesOf` (never another multipart parser). Express `req` / `res` are not reachable.
+- Every route declares `need` (`null` for no right): a route without it is refused at its declaration.
 - Refuse with `throw new HttpError( code, "short message" )`. Never put a value, an id from the request or an internal detail in the message.
-- SQL is written with tagged templates only. Never build SQL text by concatenation.
-- `req.user` is a `SessionUser` (`id`, `login`, `grps`), a copy per request.
+- SQL is written with tagged templates only, in the methods of the model that owns the data, nowhere else. Never build SQL text by concatenation.
+- `ctx.session.user` is a `SessionUser` (`id`, `login`, `grps`), a copy per request. Log with `Logger.app`: there is no logger in `ctx`, and a logger is never passed around.
 - Rights are `"resource/create"`, `"resource/read"`, `"resource/update"` or `"resource/delete"`, nothing else; `"resource/*"` and `"*"` grant more. A business action (import, export, recount) takes the CRUD right it amounts to: an import creates, so `"notes/create"`.
 - `Config` fields are `readonly` and frozen. Never read `process.env` for settings: add a field.
 - A secret is never written in the config file: the key gives the path of a file holding it (`secret()`).
 - `Model.updateAll` must run after `new Access( )` and `new Sessions( )`, which register their models.
 - Group prefixes and mount sub-paths have no parameters; route paths may (`/item/:id`).
 - Mutex names are fixed strings, never built from data.
-- `res.locals.expectedSlow` exists for `/login` only (password hashing). Do not use it elsewhere.
+- Slow by design (no `http.slow` warning) exists for `/login` and `/stepup` only, internally (password hashing). There is no API for it.
 - `strictNullChecks` is off on purpose: test with `!v`, write no `| null` / `| undefined`.
 - When an API is unclear, read the installed sources: `node_modules/@r-libre/z4js/src/`.

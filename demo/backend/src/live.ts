@@ -20,7 +20,8 @@ export class LiveChannel extends Channel {
 			onClose: socket => {
 				this.sockets.delete( socket );
 			},
-		} );
+		// the events tell titles and authors of notes: readers only
+		}, { need: "notes/read" } );
 	}
 
 	notify( event: object ) {
@@ -29,3 +30,6 @@ export class LiveChannel extends Channel {
 		}
 	}
 }
+
+// the one live channel, mounted by the main, told by the end points
+export const live = new LiveChannel( );

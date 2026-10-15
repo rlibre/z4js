@@ -25,7 +25,9 @@
 // configuration, otherwise a client could make up its address to escape the limit.
 // Above the limit: 429 with a Retry-After header (seconds).
 
-import type { Request, RequestHandler, Response } from "express";
+import type { Request } from "express";
+import { requestOf } from "./context";
+import type { Filter } from "./endpoints";
 import { HttpError } from "./http-error";
 import { dropOldest } from "./tools";
 
@@ -68,14 +70,7 @@ export class RateLimiter {
 	}
 
 	// route filter keyed on the IP
-	readonly filter: RequestHandler = ( req, res, next ) => {
-		const wait = this.hit( req.ip ?? "?" );
-		if( wait ) {
-			return refuse( req, res, this.name, wait );
-		}
-
-		next( );
-	};
+	readonly filter: Filter = ctx => limitIp( this, requestOf( ctx ) );
 
 	private current( key: string, now: number ) {
 		const entry = this.hits.get( key );
@@ -103,9 +98,17 @@ export class RateLimiter {
 	}
 }
 
+// counts one hit for the IP of the request: 429 above the limit
+export function limitIp( limiter: RateLimiter, req: Request ) {
+	const wait = limiter.hit( req.ip ?? "?" );
+	if( wait ) {
+		refuse( req, limiter.name, wait );
+	}
+}
+
 // 429 with Retry-After: thrown, so the central error handler answers
-export function refuse( req: Request, res: Response, name: string, waitMs: number ): never {
-	res.setHeader( "Retry-After", String( Math.ceil( waitMs / 1000 ) ) );
+export function refuse( req: Request, name: string, waitMs: number ): never {
+	req.res.setHeader( "Retry-After", String( Math.ceil( waitMs / 1000 ) ) );
 	req.log?.warn( "http.ratelimited", { limiter: name, ip: req.ip } );
 	throw new HttpError( 429 );
 }

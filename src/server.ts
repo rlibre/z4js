@@ -19,9 +19,9 @@
 // groups, static folders, WebSockets and the clean shutdown.
 //
 //   const config = Config.load( AppConfig );
-//   const logger = Logger.create( config.log );
-//   const api = RouteGroup.guarded( "/api/v1", sessionGuard ).add( "/bed", bedEP );
-//   await serve( { config, logger, groups: [api], statics: [{ path: "/", folder: config.www }] } );
+//   Logger.create( config.log );                                  // Logger.app, for z4js and the application
+//   const api = RouteGroup.guarded( "/api/v1", sessions.guard, access ).add( "/bed", bedEP );
+//   await serve( { config, groups: [api], statics: [{ path: "/", folder: config.www }] } );
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -30,13 +30,14 @@ import type { Server } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import express from "express";
 import type { RequestHandler } from "express";
-import { isAccessChecked } from "./access";
 import type { Config } from "./config";
+import { DEBUG_SETTING } from "./context";
 import type { RouteGroup } from "./endpoints";
 import { createErrorHandler, notFoundHandler } from "./http-handlers";
-import type { Logger } from "./logger";
+import { Logger } from "./logger";
 import { checkFixedPath, routeKey } from "./paths";
-import { RateLimiter } from "./ratelimit";
+import { limitIp, RateLimiter } from "./ratelimit";
+import type { SessionUser } from "./session";
 import { defaultUploadFolder, UPLOAD_FOLDER } from "./uploads";
 import { createUpgradeHandler } from "./ws";
 
@@ -47,10 +48,9 @@ declare global {
 			id: string;
 			// logger whose lines carry the request id
 			log: Logger;
-			// set by the guard of a guarded group (session)
-			user?: any;
-			// the session of the request, set by the guard (session.ts)
-			session?: { id: string, stepUpUntil: number };
+			// the session of the request and its user, set by the guard (session.ts).
+			// stepUpUntil: end of the step-up, ms (0: none)
+			session?: { id: string, user: SessionUser, stepUpUntil: number };
 		}
 	}
 }
@@ -67,7 +67,6 @@ export interface StaticFolder {
 
 export interface ServeOptions {
 	config: Config;
-	logger: Logger;
 	groups: readonly RouteGroup[];
 	// served without any control: index.html, no listing, dot files ignored
 	statics?: readonly StaticFolder[];
@@ -85,7 +84,8 @@ export interface RunningServer {
 }
 
 export async function serve( options: ServeOptions ): Promise<RunningServer> {
-	const { config, logger, groups } = options;
+	const { config, groups } = options;
+	const logger = Logger.app;
 	const { server: cfg } = config;
 	const tls = !!config.tls.cert;
 
@@ -95,8 +95,9 @@ export async function serve( options: ServeOptions ): Promise<RunningServer> {
 	app.disable( "x-powered-by" );
 	app.set( "trust proxy", cfg.trustProxy );
 	app.set( UPLOAD_FOLDER, config.uploads.folder ?? defaultUploadFolder( ) );
+	app.set( DEBUG_SETTING, config.debug );
 
-	app.use( requestLog( logger, cfg.slowRequestMs, config.debug ) );
+	app.use( requestLog( logger, cfg.slowRequestMs ) );
 	app.use( securityHeaders( tls ) );
 
 	app.use( cors( cfg.cors ) );
@@ -106,7 +107,14 @@ export async function serve( options: ServeOptions ): Promise<RunningServer> {
 
 	// every route of the groups, per IP (not the static files)
 	const perIp = config.rateLimit.apiPerMinute;
-	const apiLimit: RequestHandler = perIp > 0 ? new RateLimiter( "api", perIp, 60_000 ).filter : ( _req, _res, next ) => next( );
+	const apiLimiter = perIp > 0 ? new RateLimiter( "api", perIp, 60_000 ) : null;
+	const apiLimit: RequestHandler = ( req, _res, next ) => {
+		if( apiLimiter ) {
+			limitIp( apiLimiter, req );
+		}
+
+		next( );
+	};
 
 	for( const group of groups ) {
 		app.use( group.prefix, apiLimit, noStore, group.toRouter( ) );
@@ -122,7 +130,7 @@ export async function serve( options: ServeOptions ): Promise<RunningServer> {
 	}
 
 	app.use( notFoundHandler );
-	app.use( createErrorHandler( logger ) );
+	app.use( createErrorHandler( ) );
 
 	const server = tls
 		? createHttpsServer( { cert: readFileSync( config.tls.cert ), key: config.tls.key }, app )
@@ -132,7 +140,7 @@ export async function serve( options: ServeOptions ): Promise<RunningServer> {
 	server.requestTimeout = cfg.requestTimeoutMs;
 	server.keepAliveTimeout = cfg.keepAliveTimeoutMs;
 
-	const sockets = createUpgradeHandler( groups, { logger } );
+	const sockets = createUpgradeHandler( groups );
 	server.on( "upgrade", sockets.upgrade );
 
 	await new Promise<void>( ( resolve, reject ) => {
@@ -200,9 +208,7 @@ function checkGroups( groups: readonly RouteGroup[] ) {
 // cannot be forged) and logs it once answered. the time runs until the answer is sent
 // ("finish"), so an async handler is measured whole; above slowMs, it is a warning.
 // "close" without "finish": the client left before the answer.
-// debug: a successful answer of a guarded route (req.user set by the guard) given
-// without any access check (userHasAccess or noAccessCheck) is a warning
-function requestLog( logger: Logger, slowMs: number, debug: boolean ): RequestHandler {
+function requestLog( logger: Logger, slowMs: number ): RequestHandler {
 	return ( req, res, next ) => {
 		req.id = randomBytes( 9 ).toString( "base64url" );
 		req.log = logger.child( req.id );
@@ -224,9 +230,6 @@ function requestLog( logger: Logger, slowMs: number, debug: boolean ): RequestHa
 				req.log.info( "http.request", line );
 			}
 
-			if( debug && req.user && res.statusCode < 400 && !isAccessChecked( req.user ) ) {
-				req.log.warn( "access.unchecked", data );
-			}
 		} );
 
 		res.once( "close", ( ) => {

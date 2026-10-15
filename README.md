@@ -27,14 +27,14 @@ z4js takes the other road. One package provides the pieces a business backend ac
 ## Three lines tell the whole story
 
 ```ts
-const api = RouteGroup.guarded( "/api", sessions.guard )
-	.add( "/notes", new NotesEP( deps ) )
+const api = RouteGroup.guarded( "/api", sessions.guard, access )
+	.add( "/notes", new NotesEP( ) )
 	.add( "/live", live );
 
 const auth = RouteGroup.unprotected( "/auth" )
 	.add( "/", sessions.endPoints );
 
-await serve( { config, logger, groups: [api, auth], statics: [{ path: "/", folder: config.www }] } );
+await serve( { config, groups: [api, auth], statics: [{ path: "/", folder: config.www }] } );
 ```
 
 The whole exposed surface is visible in the main. A group is either guarded or unprotected, and you have to say which one: an open route stands out in review instead of hiding behind a forgotten middleware.
@@ -46,42 +46,39 @@ The whole exposed surface is visible in the main. A group is either guarded or u
 ```ts
 // the routes of the notes
 export class NotesEP extends EndPoints {
-	constructor( private readonly deps: Deps ) {
+	constructor( ) {
 		super( );
 
-		this.get( "/item/:id", this.on_item );
-		this.post( "/create", this.on_create );
-		this.del( "/item/:id", this.on_delete, { filter: deps.sessions.stepUp } );
+		this.get( "/item/:id", this.on_item, { need: "notes/read" } );
+		this.post( "/create", this.on_create, { need: "notes/create" } );
+		this.del( "/item/:id", this.on_delete, { need: "notes/delete", filter: Sessions.stepUp } );
 	}
 
-	async on_create( req: Request, res: Response ) {
-		await this.need( req, "notes/create" );
-
-		const title = this.bodyValue( req, "title", "string", { maxlength: 100, trim: true } );
-		const text = this.bodyValue( req, "text", "string", { maxlength: 10_000 } );
+	async on_create( ctx: Ctx<{ id: string }> ) {
+		const title = ctx.bodyValue( "title", "string", { maxlength: 100, trim: true } );
+		const text = ctx.bodyValue( "text", "string", { maxlength: 10_000 } );
 		...
-		res.status( 201 ).json( { id } );
+		ctx.status( 201 ).json( { id } );
 	}
 }
 ```
 
-An `EndPoints` object only **notes** its routes: it touches neither Express nor the configuration, so it can be created anywhere, tested alone, and mounted in several groups (`/api/v1`, `/api/v2`).
+An `EndPoints` object only **notes** its routes: it touches neither Express nor the configuration, so it can be created anywhere, tested alone, and mounted in several groups (`/api/v1`, `/api/v2`). Each route says the right it needs, checked by the group before anything else.
 
-`paramValue`, `bodyValue` and `queryValue` read one named value, convert it, check it, and return the right TypeScript type: `"uuid"` gives a `UUID`, `"integer"` a `number`, `"sql-date"` a `Date`. A missing, malformed, too long or out of range value is a `400` that names the parameter and never echoes its value.
+A handler receives the context of its request, `Ctx<T>`, where `T` is the type of its answer: `ctx.json( ... )` only accepts a `T`. `paramValue`, `bodyValue` and `queryValue` read one named value, convert it, check it, and return the right TypeScript type: `"uuid"` gives a `UUID`, `"integer"` a `number`, `"sql-date"` a `Date`, `"integer[]"` a `number[]`, and `"enum"` with `values: ["open", "closed"]` gives `"open" | "closed"`. A missing, malformed, too long or out of range value is a `400` that names the parameter and never echoes its value.
 
 ---
 
 ## Files, refused unless declared
 
 ```ts
-async on_import( req: Request, res: Response ) {
-	await this.need( req, "notes/create" );          // before reading a single byte
-
-	const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
-	const comment = this.bodyValue( req, "comment", "string", { required: false } );
+// this.post( "/import", this.on_import, { need: "notes/create" } ): checked before reading a single byte
+async on_import( ctx: Ctx<{ id: string }> ) {
+	const { data } = await ctx.filesOf( { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
+	const comment = ctx.bodyValue( "comment", "string", { required: false } );
 
 	await data.keep( join( config.data, "imports", data.id ) );   // otherwise deleted at the end of the request
-	res.status( 201 ).json( { id: data.id } );
+	ctx.status( 201 ).json( { id: data.id } );
 }
 ```
 
@@ -96,7 +93,7 @@ Security is not a chapter at the end of the documentation. It is what happens wh
 - **Configuration**: an unknown key in the file is an error, never silently ignored. Secrets live in separate files. TLS is mandatory outside the loopback address. `trust proxy` is off until you say otherwise.
 - **Sessions**: opaque tokens, no cookies, only their SHA-256 hash stored. 15 minute access tokens, refresh tokens rotated on every use, and a reused refresh token ends the session (theft detected).
 - **Passwords**: PBKDF2-SHA256, 600,000 iterations, constant time comparison. An unknown login takes as long as a wrong password. Hashes are upgraded at the next login when the settings change.
-- **Step-up**: a sensitive route adds `sessions.stepUp` as a filter. Without a recent confirmation of identity, the answer is `403 step-up required`.
+- **Step-up**: a sensitive route adds `Sessions.stepUp` as a filter. Without a recent confirmation of identity, the answer is `403 step-up required`.
 - **Access rights**: four actions per resource, nothing else: `notes/create`, `notes/read`, `notes/update`, `notes/delete` (plus `notes/*` and `*`). An import creates, so it needs `notes/create`: no right is ever invented for a feature. Rights are cached 5 seconds. In debug mode, a handler that forgets to check access is reported.
 - **Rate limits**: login attempts per IP and per account, token refreshes, and every API route.
 - **Errors**: one central handler. The client receives a status and a short message; the cause goes to the log, never to the response.
@@ -151,14 +148,14 @@ const result = await stats.call( "count", { texts } );
 
 Workers are classes registered by name in a single entry file. Starting one gives the object you talk to. Messages go both ways (`post`, `broadcast`, `call`), a worker processes them one at a time, and its log lines are written by the main thread. Named mutexes are shared by every thread and released when a worker dies. In debug mode, each thread carries its name in the debugger, and calls never time out while you sit on a breakpoint.
 
-A worker that runs until the server stops, a periodic backup for instance, puts its loop in `onRun`:
+A worker that runs until the server stops, the polling of a machine for instance, puts its loop in `onRun`:
 
 ```ts
-// copies the database every hour, until the stop
-class Backup extends Worker {
+// reads the counters of the machine every second, until the stop
+class Poller extends Worker {
 	async onRun( ) {
-		while( await this.wait( 3_600_000 ) ) {      // false at once when the server stops
-			await this.sql`vacuum into ${target}`;
+		while( await this.wait( 1000 ) ) {           // false at once when the server stops
+			this.post( "counters", await readCounters( this.data.ip ) );
 		}
 	}
 }
@@ -173,7 +170,7 @@ const press = await workers.start( "autom", { name: "press", data: { ip: "10.0.0
 const oven = await workers.start( "autom", { name: "oven", data: { ip: "10.0.0.6" } } );
 
 press.post( "write", { address: 12, value: 1 } );
-workers.get( "autom", "oven" ).post( "write", { address: 3, value: 0 } );
+Workers.get( "autom", "oven" ).post( "write", { address: 3, value: 0 } );
 ```
 
 An order never reaches the wrong one: `post` and `call` belong to the object of a worker, and only interchangeable instances (`{ instances: 4 }`) are served in turn. Logs and the debugger name each thread `press@autom`, `render@render#2`.
@@ -208,9 +205,9 @@ A worker bundles only what it uses: the package declares no side effect at impor
 
 ```ts
 // the handler: the task id comes back at once
-const task = tasks.create( req.user );
+const task = tasks.create( ctx.session.user );
 importer.post( "run", { task, file: data.id } );
-res.status( 202 ).json( { task } );
+ctx.status( 202 ).json( { task } );
 
 // the worker
 const progress = this.progress( data.task );
@@ -218,7 +215,7 @@ progress.step( "line 300 / 1200", 25 );
 progress.done( "1200 lines imported" );
 ```
 
-The client follows its task on a WebSocket (`{ task, phase: "start" | "step" | "end", text, percent }`), and a page reloaded in the middle catches up with the current state. The messages of a task go to the user who started it only, or to everybody for a broadcast task (a scheduled backup nobody asked for). A worker can only report on a task the main thread created, a progress left open is closed when the handler ends, and a worker that dies fails its tasks: a progress bar never spins forever.
+The client follows its task on a WebSocket (`{ task, phase: "start" | "step" | "end", text, percent }`), and a page reloaded in the middle catches up with the current state. The messages of a task go to the user who started it only, or to everybody for a broadcast task (a scheduled job nobody asked for). A worker can only report on a task the main thread created, a progress left open is closed when the handler ends, and a worker that dies fails its tasks: a progress bar never spins forever.
 
 ---
 
@@ -262,7 +259,7 @@ That is all. No ORM, no validation library, no logger, no session store, no JWT 
 npm install @r-libre/z4js
 ```
 
-Look at `demo/`: a notes application, backend and frontend. It shows accounts and rights, the step-up before a deletion, live notifications through WebSocket, the import of a text file, a word count done by a worker with its progress shown live, and a periodic backup broadcast to every connected user.
+Look at `demo/`: a notes application, backend and frontend. It shows accounts and rights, the step-up before a deletion, live notifications through WebSocket, the import of a text file, a word count done by a worker with its progress shown live, and a periodic backup of the database, on an exclusive SQLite connection in production.
 
 ```
 cd demo/frontend && npm install && npm run build

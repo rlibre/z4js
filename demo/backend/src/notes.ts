@@ -11,11 +11,13 @@
 //                                                 its progress comes on /api/tasks
 //   GET    /api/me                 any user
 
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { EndPoints, HttpError, noAccessCheck } from "@r-libre/z4js";
-import type { Access, Request, Response, Sessions, SqliteSql, Tasks, WorkerHandle } from "@r-libre/z4js";
-import type { LiveChannel } from "./live";
+import { EndPoints, HttpError, Sessions, Workers } from "@r-libre/z4js";
+import type { Ctx, SessionUser, WorkerHandle } from "@r-libre/z4js";
+import { live } from "./live";
+import { notesModel } from "./models";
+import type { Note, NoteHead } from "./models";
+import { tasks } from "./tasks";
 
 // limits of a note, as the client is told (characters)
 const TITLE_MAX = 100;
@@ -24,115 +26,99 @@ const TEXT_MAX = 10_000;
 // a text file: at most 4 bytes per character in UTF-8
 const IMPORT_MAX_BYTES = TEXT_MAX * 4;
 
-interface Deps {
-	sql: SqliteSql;
-	access: Access;
-	sessions: Sessions;
-	live: LiveChannel;
-	// the worker that counts the words
-	stats: WorkerHandle;
-	tasks: Tasks;
+// the words counted by the "stats" worker
+interface Stats {
+	notes: number;
+	words: number;
+	by: string;
 }
 
 // the routes of the notes (see the header)
 export class NotesEP extends EndPoints {
-	constructor( private readonly deps: Deps ) {
+	constructor( ) {
 		super( );
 
-		this.get( "/all", this.on_all );
-		this.get( "/item/:id", this.on_item );
-		this.post( "/create", this.on_create );
-		this.post( "/import", this.on_import );
-		this.del( "/item/:id", this.on_delete, { filter: deps.sessions.stepUp } );
-		this.get( "/stats", this.on_stats );
-		this.post( "/recount", this.on_recount );
+		this.get( "/all", this.on_all, { need: "notes/read" } );
+		this.get( "/item/:id", this.on_item, { need: "notes/read" } );
+		this.post( "/create", this.on_create, { need: "notes/create" } );
+		this.post( "/import", this.on_import, { need: "notes/create" } );
+		this.del( "/item/:id", this.on_delete, { need: "notes/delete", filter: Sessions.stepUp } );
+		this.get( "/stats", this.on_stats, { need: "notes/read" } );
+		this.post( "/recount", this.on_recount, { need: "notes/read" } );
 	}
 
-	async on_all( req: Request, res: Response ) {
-		await this.need( req, "notes/read" );
-		res.json( await this.deps.sql`select id, title, author, created from notes order by created desc` );
+	async on_all( ctx: Ctx<NoteHead[]> ) {
+		ctx.json( await notesModel.list( ) );
 	}
 
-	async on_item( req: Request, res: Response ) {
-		await this.need( req, "notes/read" );
-
-		const id = this.paramValue( req, "id", "uuid" );
-		const [note] = await this.deps.sql`select * from notes where id = ${id}`;
+	async on_item( ctx: Ctx<Note> ) {
+		const note = await notesModel.get( ctx.paramValue( "id", "uuid" ) );
 		if( !note ) {
 			throw new HttpError( 404, "unknown note" );
 		}
 
-		res.json( note );
+		ctx.json( note );
 	}
 
-	async on_create( req: Request, res: Response ) {
-		await this.need( req, "notes/create" );
+	async on_create( ctx: Ctx<{ id: string }> ) {
+		const title = ctx.bodyValue( "title", "string", { maxlength: TITLE_MAX, trim: true } );
+		const text = ctx.bodyValue( "text", "string", { maxlength: TEXT_MAX } );
 
-		const title = this.bodyValue( req, "title", "string", { maxlength: TITLE_MAX, trim: true } );
-		const text = this.bodyValue( req, "text", "string", { maxlength: TEXT_MAX } );
-
-		res.status( 201 ).json( { id: await this.addNote( req, title, text ) } );
+		ctx.status( 201 ).json( { id: await this.addNote( ctx, title, text ) } );
 	}
 
 	// a text file becomes a note: the file is deleted at the end of the request (not kept)
-	async on_import( req: Request, res: Response ) {
-		await this.need( req, "notes/create" );
-
-		const { file } = await this.filesOf( req, { file: { maxBytes: IMPORT_MAX_BYTES, types: ["text/plain"] } } );
+	async on_import( ctx: Ctx<{ id: string }> ) {
+		const { file } = await ctx.filesOf( { file: { maxBytes: IMPORT_MAX_BYTES, types: ["text/plain"] } } );
 		const text = await readFile( file.path, "utf-8" );
 		if( [...text].length > TEXT_MAX ) {
 			throw new HttpError( 400, "text too long" );
 		}
 
 		const title = file.name.replace( /\.txt$/i, "" ).trim( ).slice( 0, TITLE_MAX ) || "import";
-		res.status( 201 ).json( { id: await this.addNote( req, title, text ) } );
+		ctx.status( 201 ).json( { id: await this.addNote( ctx, title, text ) } );
 	}
 
-	async on_delete( req: Request, res: Response ) {
-		await this.need( req, "notes/delete" );
-
-		const id = this.paramValue( req, "id", "uuid" );
-		const { count } = await this.deps.sql`delete from notes where id = ${id}`;
-		if( !count ) {
+	async on_delete( ctx: Ctx ) {
+		const id = ctx.paramValue( "id", "uuid" );
+		if( !await notesModel.remove( id ) ) {
 			throw new HttpError( 404, "unknown note" );
 		}
 
-		this.deps.live.notify( { event: "deleted", id } );
-		res.json( {} );
+		live.notify( { event: "deleted", id } );
+		ctx.ok( );
 	}
 
-	async on_stats( req: Request, res: Response ) {
-		await this.need( req, "notes/read" );
-
-		const rows = await this.deps.sql`select text from notes`;
-		res.json( await this.deps.stats.call( "count", { texts: rows.map( r => r.text ) } ) );
+	async on_stats( ctx: Ctx<Stats> ) {
+		const texts = await notesModel.texts( );
+		ctx.json( await this.stats( ).call( "count", { texts } ) as Stats );
 	}
 
 	// the worker reports the progress of the task: the answer gives its id at once
-	async on_recount( req: Request, res: Response ) {
-		await this.need( req, "notes/read" );
+	async on_recount( ctx: Ctx<{ task: string }> ) {
+		const stats = this.stats( );
+		const texts = await notesModel.texts( );
+		const task = tasks.create( ctx.session.user );
+		stats.post( "recount", { task, texts } );
 
-		const rows = await this.deps.sql`select text from notes`;
-		const task = this.deps.tasks.create( req.user );
-		this.deps.stats.post( "recount", { task, texts: rows.map( r => r.text ) } );
-
-		res.status( 202 ).json( { task } );
+		ctx.status( 202 ).json( { task } );
 	}
 
 	// stores the note and tells the live channel, returns its id
-	private async addNote( req: Request, title: string, text: string ): Promise<string> {
-		const note = { id: randomUUID( ), title, text, author: req.user.login, created: new Date( ) };
-
-		await this.deps.sql`insert into notes ${this.deps.sql( note )}`;
-		this.deps.live.notify( { event: "created", id: note.id, title, author: note.author } );
-
+	private async addNote( ctx: Ctx<any>, title: string, text: string ): Promise<string> {
+		const note = await notesModel.add( title, text, ctx.session.user.login );
+		live.notify( { event: "created", id: note.id, title, author: note.author } );
 		return note.id;
 	}
 
-	private async need( req: Request, right: string ) {
-		if( !await this.deps.access.userHasAccess( req.user, right ) ) {
-			throw new HttpError( 403 );
+	// the worker that counts the words (started by the main)
+	private stats( ): WorkerHandle {
+		const stats = Workers.get( "stats" );
+		if( !stats ) {
+			throw new HttpError( 503 );
 		}
+
+		return stats;
 	}
 }
 
@@ -140,12 +126,11 @@ export class NotesEP extends EndPoints {
 export class MeEP extends EndPoints {
 	constructor( ) {
 		super( );
-		this.get( "/", this.on_me );
+		// any logged user may see himself
+		this.get( "/", this.on_me, { need: null } );
 	}
 
-	// any logged user may see himself: no right to check
-	on_me( req: Request, res: Response ) {
-		noAccessCheck( req.user );
-		res.json( req.user );
+	on_me( ctx: Ctx<SessionUser> ) {
+		ctx.json( ctx.session.user );
 	}
 }

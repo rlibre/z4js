@@ -58,6 +58,37 @@
     }
   });
 
+  // x4-internal:copy-state
+  var copy_state_default = "C:\\dev\\rlibre\\z4-2026\\demo\\frontend\\public\\index.html\x00282\x001790868506179.5874";
+
+  // node_modules/x4js/cli/dev-client.js
+  var events = new EventSource("/esbuild");
+  Object.defineProperty(events, "__x4CopyState", { value: copy_state_default });
+  events.addEventListener("change", (event) => {
+    const change = JSON.parse(event.data);
+    const changed = [...change.added, ...change.removed, ...change.updated];
+    if (change.added.length === 0 && change.removed.length === 0 && change.updated.length > 0 && change.updated.every((file) => file.endsWith(".css"))) {
+      const pending = new Set(change.updated);
+      const links = document.querySelectorAll('link[rel="stylesheet"]');
+      for (const link of links) {
+        const current2 = new URL(link.href);
+        if (!pending.has(current2.pathname))
+          continue;
+        const next = link.cloneNode();
+        const url = new URL(link.href);
+        url.searchParams.set("x4", Date.now().toString());
+        next.href = url.href;
+        next.onload = () => link.remove();
+        link.after(next);
+        pending.delete(current2.pathname);
+      }
+      if (pending.size === 0)
+        return;
+    }
+    if (changed.length)
+      location.reload();
+  });
+
   // node_modules/x4js/src/core/core_i18n.ts
   var languages = {};
   function createLanguage(name, base) {
@@ -824,7 +855,7 @@
     }
   };
   __name(_EventSource, "EventSource");
-  var EventSource = _EventSource;
+  var EventSource2 = _EventSource;
 
   // node_modules/x4js/src/core/core_element.ts
   var _events, _timers, _cleanup;
@@ -991,7 +1022,7 @@
     on(name, listener) {
       console.assert(listener !== void 0 && listener !== null);
       if (!__privateGet(this, _events)) {
-        __privateSet(this, _events, new EventSource(this));
+        __privateSet(this, _events, new EventSource2(this));
       }
       __privateGet(this, _events).addListener(name, listener);
       return {
@@ -1501,7 +1532,7 @@
     return c === "." || c === "[";
   }
   __name(_path_matches, "_path_matches");
-  var _StateManager = class _StateManager extends EventSource {
+  var _StateManager = class _StateManager extends EventSource2 {
     constructor(initialState) {
       super();
       __publicField(this, "_state");
@@ -1899,9 +1930,9 @@
         * Sets multiple DOM event listeners on the component's DOM element.
         * @param events - An object where keys are event names and values are their corresponding handler functions.
         */
-    setDOMEvents(events) {
-      for (const name in events) {
-        this.addDOMEvent(name, events[name]);
+    setDOMEvents(events2) {
+      for (const name in events2) {
+        this.addDOMEvent(name, events2[name]);
       }
     }
     // :: HILEVEL EVENTS ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -5618,13 +5649,13 @@
   __runInitializers(_init23, 1, _Menu);
   var Menu = _Menu;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\calendar\chevron-left-sharp-light.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\calendar\chevron-left-sharp-light.svg
   var chevron_left_sharp_light_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMjAgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIFBybyA2LjYuMCBieSBAZm9udGF3ZXNvbWUgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbSBMaWNlbnNlIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20vbGljZW5zZSAoQ29tbWVyY2lhbCBMaWNlbnNlKSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNOS40IDI1NmwxMS4zLTExLjMgMTkyLTE5MkwyMjQgNDEuNCAyNDYuNiA2NCAyMzUuMyA3NS4zIDU0LjYgMjU2IDIzNS4zIDQzNi43IDI0Ni42IDQ0OCAyMjQgNDcwLjZsLTExLjMtMTEuMy0xOTItMTkyTDkuNCAyNTZ6Ii8+PC9zdmc+";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\calendar\calendar-check-sharp-light.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\calendar\calendar-check-sharp-light.svg
   var calendar_check_sharp_light_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0NDggNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIFBybyA2LjYuMCBieSBAZm9udGF3ZXNvbWUgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbSBMaWNlbnNlIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20vbGljZW5zZSAoQ29tbWVyY2lhbCBMaWNlbnNlKSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMTI4IDE2bDAtMTZMOTYgMGwwIDE2IDAgNDhMMzIgNjQgMCA2NCAwIDk2bDAgNjQgMCAzMkwwIDQ4MGwwIDMyIDMyIDAgMzg0IDAgMzIgMCAwLTMyIDAtMjg4IDAtMzIgMC02NCAwLTMyLTMyIDAtNjQgMCAwLTQ4IDAtMTZMMzIwIDBsMCAxNiAwIDQ4TDEyOCA2NGwwLTQ4ek0zMiAxOTJsMzg0IDAgMCAyODhMMzIgNDgwbDAtMjg4em0wLTk2bDM4NCAwIDAgNjRMMzIgMTYwbDAtNjR6TTMzMS4zIDI4My4zTDM0Mi42IDI3MiAzMjAgMjQ5LjRsLTExLjMgMTEuM0wyMDggMzYxLjRsLTUyLjctNTIuN0wxNDQgMjk3LjQgMTIxLjQgMzIwbDExLjMgMTEuMyA2NCA2NEwyMDggNDA2LjZsMTEuMy0xMS4zIDExMi0xMTJ6Ii8+PC9zdmc+";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\calendar\chevron-right-sharp-light.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\calendar\chevron-right-sharp-light.svg
   var chevron_right_sharp_light_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMjAgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIFBybyA2LjYuMCBieSBAZm9udGF3ZXNvbWUgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbSBMaWNlbnNlIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20vbGljZW5zZSAoQ29tbWVyY2lhbCBMaWNlbnNlKSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMzEwLjYgMjU2bC0xMS4zIDExLjMtMTkyIDE5Mkw5NiA0NzAuNiA3My40IDQ0OGwxMS4zLTExLjNMMjY1LjQgMjU2IDg0LjcgNzUuMyA3My40IDY0IDk2IDQxLjRsMTEuMyAxMS4zIDE5MiAxOTJMMzEwLjYgMjU2eiIvPjwvc3ZnPg==";
 
   // node_modules/x4js/src/components/calendar/calendar.ts
@@ -6459,7 +6490,7 @@
   __runInitializers(_init27, 1, _Checkbox);
   var Checkbox = _Checkbox;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\colorinput\crosshairs-simple-sharp-light.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\colorinput\crosshairs-simple-sharp-light.svg
   var crosshairs_simple_sharp_light_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIFBybyA2LjYuMCBieSBAZm9udGF3ZXNvbWUgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbSBMaWNlbnNlIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20vbGljZW5zZSAoQ29tbWVyY2lhbCBMaWNlbnNlKSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNNDc5LjQgMjQwTDM4NCAyNDBsLTE2IDAgMCAzMiAxNiAwIDk1LjQgMEM0NzEuNiAzODMgMzgzIDQ3MS42IDI3MiA0NzkuNGwwLTk1LjQgMC0xNi0zMiAwIDAgMTYgMCA5NS40QzEyOSA0NzEuNiA0MC40IDM4MyAzMi42IDI3Mmw5NS40IDAgMTYgMCAwLTMyLTE2IDAtOTUuNCAwQzQwLjQgMTI5IDEyOSA0MC40IDI0MCAzMi42bDAgOTUuNCAwIDE2IDMyIDAgMC0xNiAwLTk1LjRDMzgzIDQwLjQgNDcxLjYgMTI5IDQ3OS40IDI0MHpNMjU2IDUxMkEyNTYgMjU2IDAgMSAwIDI1NiAwYTI1NiAyNTYgMCAxIDAgMCA1MTJ6Ii8+PC9zdmc+";
 
   // node_modules/x4js/src/components/colorinput/colorinput.ts
@@ -7300,7 +7331,7 @@
   __runInitializers(_init35, 1, _Listbox);
   var Listbox = _Listbox;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\combobox\updown.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\combobox\updown.svg
   var updown_default = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTUgMTUiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+Cgk8cGF0aCBkPSJNNC45MzE3OSA1LjQzMTc5QzQuNzU2MDUgNS42MDc1MyA0Ljc1NjA1IDUuODkyNDUgNC45MzE3OSA2LjA2ODE5QzUuMTA3NTMgNi4yNDM5MiA1LjM5MjQ1IDYuMjQzOTIgNS41NjgxOSA2LjA2ODE5TDcuNDk5OTkgNC4xMzYzOEw5LjQzMTc5IDYuMDY4MTlDOS42MDc1MyA2LjI0MzkyIDkuODkyNDUgNi4yNDM5MiAxMC4wNjgyIDYuMDY4MTlDMTAuMjQzOSA1Ljg5MjQ1IDEwLjI0MzkgNS42MDc1MyAxMC4wNjgyIDUuNDMxNzlMNy44MTgxOSAzLjE4MTc5QzcuNzMzNzkgMy4wOTc0IDcuNjE5MzMgMy4wNDk5OSA3LjQ5OTk5IDMuMDQ5OTlDNy4zODA2NCAzLjA0OTk5IDcuMjY2MTggMy4wOTc0IDcuMTgxNzkgMy4xODE3OUw0LjkzMTc5IDUuNDMxNzlaTTEwLjA2ODIgOS41NjgxOUMxMC4yNDM5IDkuMzkyNDUgMTAuMjQzOSA5LjEwNzUzIDEwLjA2ODIgOC45MzE3OUM5Ljg5MjQ1IDguNzU2MDYgOS42MDc1MyA4Ljc1NjA2IDkuNDMxNzkgOC45MzE3OUw3LjQ5OTk5IDEwLjg2MzZMNS41NjgxOSA4LjkzMTc5QzUuMzkyNDUgOC43NTYwNiA1LjEwNzUzIDguNzU2MDYgNC45MzE3OSA4LjkzMTc5QzQuNzU2MDUgOS4xMDc1MyA0Ljc1NjA1IDkuMzkyNDUgNC45MzE3OSA5LjU2ODE5TDcuMTgxNzkgMTEuODE4MkM3LjM1NzUzIDExLjk5MzkgNy42NDI0NSAxMS45OTM5IDcuODE4MTkgMTEuODE4MkwxMC4wNjgyIDkuNTY4MTlaIiBmaWxsPSJjdXJyZW50Q29sb3IiIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIj4KCTwvcGF0aD4KPC9zdmc+";
 
   // node_modules/x4js/src/components/combobox/combobox.ts
@@ -7781,7 +7812,7 @@
   __runInitializers(_init39, 1, _Dialog);
   var Dialog = _Dialog;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\filedrop\cloud-arrow-up.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\filedrop\cloud-arrow-up.svg
   var cloud_arrow_up_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNTEyIj48IS0tIUZvbnQgQXdlc29tZSBGcmVlIDYuNi4wIGJ5IEBmb250YXdlc29tZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tIExpY2Vuc2UgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbS9saWNlbnNlL2ZyZWUgQ29weXJpZ2h0IDIwMjQgRm9udGljb25zLCBJbmMuLS0+PHBhdGggZD0iTTE0NCA0ODBDNjQuNSA0ODAgMCA0MTUuNSAwIDMzNmMwLTYyLjggNDAuMi0xMTYuMiA5Ni4yLTEzNS45Yy0uMS0yLjctLjItNS40LS4yLTguMWMwLTg4LjQgNzEuNi0xNjAgMTYwLTE2MGM1OS4zIDAgMTExIDMyLjIgMTM4LjcgODAuMkM0MDkuOSAxMDIgNDI4LjMgOTYgNDQ4IDk2YzUzIDAgOTYgNDMgOTYgOTZjMCAxMi4yLTIuMyAyMy44LTYuNCAzNC42QzU5NiAyMzguNCA2NDAgMjkwLjEgNjQwIDM1MmMwIDcwLjctNTcuMyAxMjgtMTI4IDEyOGwtMzY4IDB6bTc5LTIxN2MtOS40IDkuNC05LjQgMjQuNiAwIDMzLjlzMjQuNiA5LjQgMzMuOSAwbDM5LTM5TDI5NiAzOTJjMCAxMy4zIDEwLjcgMjQgMjQgMjRzMjQtMTAuNyAyNC0yNGwwLTEzNC4xIDM5IDM5YzkuNCA5LjQgMjQuNiA5LjQgMzMuOSAwczkuNC0yNC42IDAtMzMuOWwtODAtODBjLTkuNC05LjQtMjQuNi05LjQtMzMuOSAwbC04MCA4MHoiLz48L3N2Zz4=";
 
   // node_modules/x4js/src/components/filedrop/filedrop.ts
@@ -9098,13 +9129,13 @@
   __runInitializers(_init44, 1, _Header);
   var Header = _Header;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\delete-left.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\delete-left.svg
   var delete_left_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1NzYgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIEZyZWUgNi43LjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UvZnJlZSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNNTc2IDEyOGMwLTM1LjMtMjguNy02NC02NC02NEwyMDUuMyA2NGMtMTcgMC0zMy4zIDYuNy00NS4zIDE4LjdMOS40IDIzMy40Yy02IDYtOS40IDE0LjEtOS40IDIyLjZzMy40IDE2LjYgOS40IDIyLjZMMTYwIDQyOS4zYzEyIDEyIDI4LjMgMTguNyA0NS4zIDE4LjdMNTEyIDQ0OGMzNS4zIDAgNjQtMjguNyA2NC02NGwwLTI1NnpNMjcxIDE3NWM5LjQtOS40IDI0LjYtOS40IDMzLjkgMGw0NyA0NyA0Ny00N2M5LjQtOS40IDI0LjYtOS40IDMzLjkgMHM5LjQgMjQuNiAwIDMzLjlsLTQ3IDQ3IDQ3IDQ3YzkuNCA5LjQgOS40IDI0LjYgMCAzMy45cy0yNC42IDkuNC0zMy45IDBsLTQ3LTQ3LTQ3IDQ3Yy05LjQgOS40LTI0LjYgOS40LTMzLjkgMHMtOS40LTI0LjYgMC0zMy45bDQ3LTQ3LTQ3LTQ3Yy05LjQtOS40LTkuNC0yNC42IDAtMzMuOXoiLz48L3N2Zz4=";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\arrow-up.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\arrow-up.svg
   var arrow_up_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzODQgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIEZyZWUgNi43LjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UvZnJlZSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMjE0LjYgNDEuNGMtMTIuNS0xMi41LTMyLjgtMTIuNS00NS4zIDBsLTE2MCAxNjBjLTEyLjUgMTIuNS0xMi41IDMyLjggMCA0NS4zczMyLjggMTIuNSA0NS4zIDBMMTYwIDE0MS4yIDE2MCA0NDhjMCAxNy43IDE0LjMgMzIgMzIgMzJzMzItMTQuMyAzMi0zMmwwLTMwNi43TDMyOS40IDI0Ni42YzEyLjUgMTIuNSAzMi44IDEyLjUgNDUuMyAwczEyLjUtMzIuOCAwLTQ1LjNsLTE2MC0xNjB6Ii8+PC9zdmc+";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\eye-slash.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\keyboard\eye-slash.svg
   var eye_slash_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIEZyZWUgNi43LjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UvZnJlZSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMzguOCA1LjFDMjguNC0zLjEgMTMuMy0xLjIgNS4xIDkuMlMtMS4yIDM0LjcgOS4yIDQyLjlsNTkyIDQ2NGMxMC40IDguMiAyNS41IDYuMyAzMy43LTQuMXM2LjMtMjUuNS00LjEtMzMuN0w1MjUuNiAzODYuN2MzOS42LTQwLjYgNjYuNC04Ni4xIDc5LjktMTE4LjRjMy4zLTcuOSAzLjMtMTYuNyAwLTI0LjZjLTE0LjktMzUuNy00Ni4yLTg3LjctOTMtMTMxLjFDNDY1LjUgNjguOCA0MDAuOCAzMiAzMjAgMzJjLTY4LjIgMC0xMjUgMjYuMy0xNjkuMyA2MC44TDM4LjggNS4xem0xNTEgMTE4LjNDMjI2IDk3LjcgMjY5LjUgODAgMzIwIDgwYzY1LjIgMCAxMTguOCAyOS42IDE1OS45IDY3LjdDNTE4LjQgMTgzLjUgNTQ1IDIyNiA1NTguNiAyNTZjLTEyLjYgMjgtMzYuNiA2Ni44LTcwLjkgMTAwLjlsLTUzLjgtNDIuMmM5LjEtMTcuNiAxNC4yLTM3LjUgMTQuMi01OC43YzAtNzAuNy01Ny4zLTEyOC0xMjgtMTI4Yy0zMi4yIDAtNjEuNyAxMS45LTg0LjIgMzEuNWwtNDYuMS0zNi4xek0zOTQuOSAyODQuMmwtODEuNS02My45YzQuMi04LjUgNi42LTE4LjIgNi42LTI4LjNjMC01LjUtLjctMTAuOS0yLTE2Yy43IDAgMS4zIDAgMiAwYzQ0LjIgMCA4MCAzNS44IDgwIDgwYzAgOS45LTEuOCAxOS40LTUuMSAyOC4yem05LjQgMTMwLjNDMzc4LjggNDI1LjQgMzUwLjcgNDMyIDMyMCA0MzJjLTY1LjIgMC0xMTguOC0yOS42LTE1OS45LTY3LjdDMTIxLjYgMzI4LjUgOTUgMjg2IDgxLjQgMjU2YzguMy0xOC40IDIxLjUtNDEuNSAzOS40LTY0LjhMODMuMSAxNjEuNUM2MC4zIDE5MS4yIDQ0IDIyMC44IDM0LjUgMjQzLjdjLTMuMyA3LjktMy4zIDE2LjcgMCAyNC42YzE0LjkgMzUuNyA0Ni4yIDg3LjcgOTMgMTMxLjFDMTc0LjUgNDQzLjIgMjM5LjIgNDgwIDMyMCA0ODBjNDcuOCAwIDg5LjktMTIuOSAxMjYuMi0zMi41bC00MS45LTMzek0xOTIgMjU2YzAgNzAuNyA1Ny4zIDEyOCAxMjggMTI4YzEzLjMgMCAyNi4xLTIgMzguMi01LjhMMzAyIDMzNGMtMjMuNS01LjQtNDMuMS0yMS4yLTUzLjctNDIuM2wtNTYuMS00NC4yYy0uMiAyLjgtLjMgNS42LS4zIDguNXoiLz48L3N2Zz4=";
 
   // node_modules/x4js/src/components/keyboard/keyboard.ts
@@ -9565,16 +9596,16 @@
   __runInitializers(_init46, 1, _Link);
   var Link = _Link;
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\messages\circle-exclamation.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\messages\circle-exclamation.svg
   var circle_exclamation_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIEZyZWUgNi42LjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UvZnJlZSBDb3B5cmlnaHQgMjAyNCBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMjU2IDUxMkEyNTYgMjU2IDAgMSAwIDI1NiAwYTI1NiAyNTYgMCAxIDAgMCA1MTJ6bTAtMzg0YzEzLjMgMCAyNCAxMC43IDI0IDI0bDAgMTEyYzAgMTMuMy0xMC43IDI0LTI0IDI0cy0yNC0xMC43LTI0LTI0bDAtMTEyYzAtMTMuMyAxMC43LTI0IDI0LTI0ek0yMjQgMzUyYTMyIDMyIDAgMSAxIDY0IDAgMzIgMzIgMCAxIDEgLTY0IDB6Ii8+PC9zdmc+";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\messages\circle-question.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\messages\circle-question.svg
   var circle_question_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNjQwIiBmaWxsPSJjdXJyZW50Q29sb3IiPjwhLS0hRm9udCBBd2Vzb21lIEZyZWUgNy4yLjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UvZnJlZSBDb3B5cmlnaHQgMjAyNiBGb250aWNvbnMsIEluYy4tLT48cGF0aCBkPSJNMzIwIDU3NkM0NjEuNCA1NzYgNTc2IDQ2MS40IDU3NiAzMjBDNTc2IDE3OC42IDQ2MS40IDY0IDMyMCA2NEMxNzguNiA2NCA2NCAxNzguNiA2NCAzMjBDNjQgNDYxLjQgMTc4LjYgNTc2IDMyMCA1NzZ6TTMyMCAyNDBDMzAyLjMgMjQwIDI4OCAyNTQuMyAyODggMjcyQzI4OCAyODUuMyAyNzcuMyAyOTYgMjY0IDI5NkMyNTAuNyAyOTYgMjQwIDI4NS4zIDI0MCAyNzJDMjQwIDIyNy44IDI3NS44IDE5MiAzMjAgMTkyQzM2NC4yIDE5MiA0MDAgMjI3LjggNDAwIDI3MkM0MDAgMzE5LjIgMzY0IDMzOS4yIDM0NCAzNDYuNUwzNDQgMzUwLjNDMzQ0IDM2My42IDMzMy4zIDM3NC4zIDMyMCAzNzQuM0MzMDYuNyAzNzQuMyAyOTYgMzYzLjYgMjk2IDM1MC4zTDI5NiAzNDIuMkMyOTYgMzIxLjcgMzEwLjggMzA3IDMyNi4xIDMwMkMzMzIuNSAyOTkuOSAzMzkuMyAyOTYuNSAzNDQuMyAyOTEuN0MzNDguNiAyODcuNSAzNTIgMjgxLjcgMzUyIDI3Mi4xQzM1MiAyNTQuNCAzMzcuNyAyNDAuMSAzMjAgMjQwLjF6TTI4OCA0MzJDMjg4IDQxNC4zIDMwMi4zIDQwMCAzMjAgNDAwQzMzNy43IDQwMCAzNTIgNDE0LjMgMzUyIDQzMkMzNTIgNDQ5LjcgMzM3LjcgNDY0IDMyMCA0NjRDMzAyLjMgNDY0IDI4OCA0NDkuNyAyODggNDMyeiIvPjwvc3ZnPg==";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\messages\pen-field.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\messages\pen-field.svg
   var pen_field_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNTEyIj48IS0tIUZvbnQgQXdlc29tZSBQcm8gNi42LjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UgKENvbW1lcmNpYWwgTGljZW5zZSkgQ29weXJpZ2h0IDIwMjQgRm9udGljb25zLCBJbmMuLS0+PHBhdGggY2xhc3M9ImZhLXNlY29uZGFyeSIgb3BhY2l0eT0iLjQiIGQ9Ik0wIDEyOGwzMiAwIDIyNCAwIDMyIDAgMCA2NC0zMiAwTDY0IDE5MmwwIDI1NiA0NDggMCAwLTEyOCAwLTMyIDY0IDAgMCAzMiAwIDE2MCAwIDMyLTMyIDBMMzIgNTEyIDAgNTEybDAtMzJMMCAxNjBsMC0zMnoiLz48cGF0aCBjbGFzcz0iZmEtcHJpbWFyeSIgZD0iTTI4OCAzNTJsMTYtMTEyTDQ2OC43IDc1LjNsOTYgOTZMNDAwIDMzNiAyODggMzUyek01ODcuMyAxNDguN2wtOTYtOTZMNTQ0IDBsOTYgOTYtNTIuNyA1Mi43ek05NiAyODhsNjQgMCAwIDY0LTY0IDAgMC02NHptMTYwIDBsMCA2NC02NCAwIDAtNjQgNjQgMHoiLz48L3N2Zz4=";
 
-  // x4-raw-file:C:\dev\rlibre\y4-2026\demo\frontend\node_modules\x4js\src\components\messages\spinner.svg
+  // x4-raw-file:C:\dev\rlibre\z4-2026\demo\frontend\node_modules\x4js\src\components\messages\spinner.svg
   var spinner_default = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNjQwIj48IS0tIUZvbnQgQXdlc29tZSBQcm8gNy4yLjAgYnkgQGZvbnRhd2Vzb21lIC0gaHR0cHM6Ly9mb250YXdlc29tZS5jb20gTGljZW5zZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tL2xpY2Vuc2UgKENvbW1lcmNpYWwgTGljZW5zZSkgQ29weXJpZ2h0IDIwMjYgRm9udGljb25zLCBJbmMuLS0+PHBhdGggZD0iTTM1MiA5NkMzNTIgNzguMyAzMzcuNyA2NCAzMjAgNjRDMzAyLjMgNjQgMjg4IDc4LjMgMjg4IDk2QzI4OCAxMTMuNyAzMDIuMyAxMjggMzIwIDEyOEMzMzcuNyAxMjggMzUyIDExMy43IDM1MiA5NnpNMzUyIDU0NEMzNTIgNTI2LjMgMzM3LjcgNTEyIDMyMCA1MTJDMzAyLjMgNTEyIDI4OCA1MjYuMyAyODggNTQ0QzI4OCA1NjEuNyAzMDIuMyA1NzYgMzIwIDU3NkMzMzcuNyA1NzYgMzUyIDU2MS43IDM1MiA1NDR6TTUxMiAzMjBDNTEyIDMzNy43IDUyNi4zIDM1MiA1NDQgMzUyQzU2MS43IDM1MiA1NzYgMzM3LjcgNTc2IDMyMEM1NzYgMzAyLjMgNTYxLjcgMjg4IDU0NCAyODhDNTI2LjMgMjg4IDUxMiAzMDIuMyA1MTIgMzIwek05NiAzNTJDMTEzLjcgMzUyIDEyOCAzMzcuNyAxMjggMzIwQzEyOCAzMDIuMyAxMTMuNyAyODggOTYgMjg4Qzc4LjMgMjg4IDY0IDMwMi4zIDY0IDMyMEM2NCAzMzcuNyA3OC4zIDM1MiA5NiAzNTJ6TTEzOSA1MDFDMTQ2LjkgNTA5LjggMTU5IDUxMy40IDE3MC41IDUxMC42QzE4MS45IDUwNy43IDE5MC45IDQ5OC43IDE5My44IDQ4Ny4zQzE5Ni42IDQ3NS44IDE5MyA0NjMuNyAxODQuMiA0NTUuOEMxNzYuMyA0NDcgMTY0LjIgNDQzLjQgMTUyLjcgNDQ2LjJDMTQxLjMgNDQ5LjEgMTMyLjMgNDU4LjEgMTI5LjQgNDY5LjVDMTI2LjYgNDgxIDEzMC4yIDQ5My4xIDEzOSA1MDF6TTQ1NS44IDUwMUM0NjMuNyA1MDkuOCA0NzUuOCA1MTMuNCA0ODcuMyA1MTAuNkM0OTguNyA1MDcuNyA1MDcuNyA0OTguNyA1MTAuNiA0ODcuM0M1MTMuNCA0NzUuOCA1MDkuOCA0NjMuNyA1MDEgNDU1LjhDNDkzLjEgNDQ3IDQ4MSA0NDMuNCA0NjkuNSA0NDYuMkM0NTguMSA0NDkuMSA0NDkuMSA0NTguMSA0NDYuMiA0NjkuNUM0NDMuNCA0ODEgNDQ3IDQ5My4xIDQ1NS44IDUwMXpNMTM5IDEzOUMxMzAuMiAxNDYuOSAxMjYuNiAxNTkgMTI5LjQgMTcwLjVDMTMyLjMgMTgxLjkgMTQxLjMgMTkwLjkgMTUyLjcgMTkzLjhDMTY0LjIgMTk2LjYgMTc2LjMgMTkzIDE4NC4yIDE4NC4yQzE5MyAxNzYuMyAxOTYuNiAxNjQuMiAxOTMuOCAxNTIuN0MxOTAuOSAxNDEuMyAxODEuOSAxMzIuMyAxNzAuNSAxMjkuNEMxNTkgMTI2LjYgMTQ2LjkgMTMwLjIgMTM5IDEzOXoiLz48L3N2Zz4=";
 
   // node_modules/x4js/src/components/messages/messages.ts
@@ -12316,7 +12347,7 @@
       this.early = null;
       early.forEach((e) => this.onTask(e));
     }
-    // our recount moves its box; the end of another task (the backup of the server,
+    // our recount moves its box; the end of another task (a broadcast task,
     // a recount started elsewhere) is a notification
     onTask(e) {
       if (this.early) {

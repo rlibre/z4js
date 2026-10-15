@@ -31,7 +31,8 @@
 		"prepack": "npm run build",
 		"build-publish": "deno run --allow-all ./publish.ts",
 		"typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.shared.json --noEmit",
-		"mime-db": "node scripts/mime-db.ts"
+		"mime-db": "node scripts/mime-db.ts",
+		"test": "node scripts/test.ts"
 	},
 	"dependencies": {
 		"@fastify/busboy": "^3.2.2",

@@ -21,17 +21,17 @@ Prefer:
 - a `Config` subclass for every setting
 - `EndPoints` classes for HTTP routes, `Channel` for WebSockets
 - `RouteGroup.guarded` / `RouteGroup.unprotected` to expose them
-- `paramValue`, `bodyValue`, `queryValue` to read a request
+- the context of the request (`ctx: Ctx<T>`) to read it and answer it: `paramValue`, `bodyValue`, `queryValue`, `json`
 - `HttpError` to refuse
-- tagged template SQL (`sql\`...\``) written in the handler or in a small module
-- `Model` subclasses for the database structure
+- tagged template SQL (`sql\`...\``) written in the methods of the `Model` that owns the data
+- `Model` subclasses for the database structure and the queries on its data
 - `Workers` and `Mutex` for background work and shared locks
 - `Logger` events with JSON data
 
 Avoid introducing by default:
 
 - dependency injection containers
-- repositories, services and DAO layers around plain SQL
+- repositories, services and DAO layers besides the models: the model is the only layer around the SQL
 - ORMs and query builders
 - decorators for routes or validation
 - validation libraries (`Shape` exists, and is never mandatory)
@@ -64,13 +64,19 @@ Logger        what happened
 
 An `EndPoints` object only **notes** its routes. It touches neither Express nor the configuration, so it can be created anywhere and mounted in several groups.
 
-A handler is a method, given unbound:
+A handler is a method, given unbound, with its options:
 
 ```ts
-this.get( "/item/:id", this.on_item );
+this.get( "/item/:id", this.on_item, { need: "notes/read" } );
+
+async on_item( ctx: Ctx<Note> ) { ... }
 ```
 
 It runs with the `EndPoints` object as `this`. Do not write `this.on_item.bind( this )` nor arrow wrappers.
+
+The handler receives only its context, `ctx: Ctx<T>`, where `T` is the type of its JSON answer (`Ctx` alone: no typed JSON, `Ctx<Binary>`: a file or binary data). Express `req` and `res` are not reachable: do not look for them.
+
+The way of a request: the guard of the group (401), then `need` (403), then the filters, in order, then the handler. A step that throws ends the request. A filter lets through or refuses by throwing an `HttpError`: it never answers (`ctx.json`, `ok`, `send`, `download` throw in a filter); only the handler answers.
 
 ### RouteGroup
 
@@ -100,11 +106,12 @@ Refuse by default. Anything not explicitly allowed is refused.
 
 - A new resource goes in a **guarded** group unless it is meant to be public (login, health, signed webhooks).
 - Rights follow one convention: `resource/create`, `resource/read`, `resource/update`, `resource/delete`, nothing else. A business action takes the CRUD right it amounts to (an import creates: `notes/create`; an export reads: `notes/read`). Never invent an action such as `notes/import`.
-- Every handler of a guarded group calls `userHasAccess( req.user, "resource/action" )` and throws `HttpError( 403 )` when refused, or calls `noAccessCheck( req.user )` when no right is needed. In debug mode, forgetting both logs `access.unchecked`.
+- Every route declares its right with `need`, which is required: one right, several (all required), a function for what a right cannot say (the owner of a record), or `null` for no right (`GET /me`, `/login`). A route without `need` is refused at its declaration.
+- `need` is checked with the `Access` given to the group (`RouteGroup.guarded( "/api", sessions.guard, access )`). Only `null` is accepted in an unprotected group, even for a function (which needs no `Access`): `need` is about the rights of a user, and there is no user there. A check made without a session (the signature of a webhook...) is a filter. Anything but `null` there is refused at startup.
 - A destructive or sensitive route adds the step-up filter:
 
 ```ts
-this.del( "/item/:id", this.on_delete, { filter: sessions.stepUp } );
+this.del( "/item/:id", this.on_delete, { need: "notes/delete", filter: Sessions.stepUp } );
 ```
 
 - A public route that can be abused gets a `RateLimiter` filter.
@@ -114,21 +121,29 @@ this.del( "/item/:id", this.on_delete, { filter: sessions.stepUp } );
 
 ## 4. Reading a request
 
-Never read `req.body`, `req.params` or `req.query` directly. Use the `EndPoints` methods:
+Read every value with the methods of the context:
 
 ```ts
-const id = this.paramValue( req, "id", "uuid" );
-const title = this.bodyValue( req, "title", "string", { maxlength: 100, trim: true } );
-const page = this.queryValue( req, "page", "integer", { required: false, default: 1, minval: 1 } );
+const id = ctx.paramValue( "id", "uuid" );
+const title = ctx.bodyValue( "title", "string", { maxlength: 100, trim: true } );
+const page = ctx.queryValue( "page", "integer", { required: false, default: 1, minval: 1 } );
+const state = ctx.queryValue( "state", "enum", { values: ["open", "closed"] } );	// "open" | "closed"
+const ids = ctx.queryValue( "ids", "uuid[]" );	// ?ids=a&ids=b; a single value is an array of one
 ```
 
-The return type follows the requested type. Give the limits the database has: a `text not null` column of 100 characters is `{ maxlength: 100 }`.
+The return type follows the requested type. `"enum"` needs its `values` (forgetting them does not compile; no `as const`). Arrays (`"string[]"`, `"number[]"`, `"integer[]"`, `"uuid[]"`, `"boolean[]"`, `"object[]"`) check each item with the options, and hold 100 items at most unless `maxitems` says otherwise. Never ask the client for a comma separated list.
 
-For a structured object, read it as `"object"` and validate it with a `Shape` when its shape matters:
+`ctx.rawBody` is the decoded body, `unknown`: prefer `bodyValue`. The session of a guarded request is `ctx.session` (`id`, `user`, `stepUpUntil`), read only. Give the limits the database has: a `text not null` column of 100 characters is `{ maxlength: 100 }`.
+
+For a structured object of the body, give its `Shape` to `bodyValue`: the result is typed by the shape and holds its declared fields only. A refused field is a 400 that names the member and the field (`Bad parameter "order": "qty": too low`), never the value. `"object[]"` checks each item the same way:
 
 ```ts
-const order = orderShape.parse( this.bodyValue( req, "order", "object" ) );
+const orderShape = Shape.object<Order>( { item: Shape.string( ).maxLen( 100 ), qty: Shape.number( ).integer( ).minMax( 1, 999 ) } );
+const order = ctx.bodyValue( "order", "object", { shape: orderShape } );		// Order
+const lines = ctx.bodyValue( "lines", "object[]", { shape: orderShape } );		// Order[]
 ```
+
+`shape` exists for `bodyValue` only. The Shape is never mandatory.
 
 For an object of known shape without a `Shape`, write `as Order`.
 
@@ -138,11 +153,12 @@ Prefer literal names, types and options: `z4js apidoc` documents them, and anyth
 
 ### Files
 
-Files arrive with the request of the action, read by `filesOf`, after the access check:
+Files arrive with the request of the action, read by `ctx.filesOf`, after the `need` of the route:
 
 ```ts
-await this.need( req, "notes/create" );
-const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
+this.post( "/import", this.on_import, { need: "notes/create" } );
+...
+const { data } = await ctx.filesOf( { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
 ```
 
 - Declare every file field with its `maxBytes`: anything else is refused. The text fields of the form are read with `bodyValue`, as usual.
@@ -154,7 +170,13 @@ const { data } = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: 
 
 ## 5. Answering and refusing
 
-Answer with `res.json( ... )`, `res.status( 201 ).json( ... )`.
+Answer with the context:
+
+- `ctx.json( value )`, typed by the `T` of `Ctx<T>`; `ctx.status( 201 ).json( ... )`.
+- `ctx.ok( )` for 200 `{}`.
+- `ctx.addHeader( name, value )` (chainable, like `status`).
+- In a `Ctx<Binary>` handler: `ctx.send( data, contentType )` or `await ctx.download( absolutePath, name )`. Never send a path built from the request.
+- A handler that sends nothing answers the status set by `ctx.status` with an empty body (`ctx.status( 204 )`). Without a status it is a 200, and a warning in debug: answer explicitly.
 
 Refuse with an `HttpError`:
 
@@ -184,9 +206,35 @@ Never build SQL text by concatenation or template strings. A dynamic identifier 
 
 When updating from an object that came from a client, name the columns (`sql( changes, "title", "text" )`): they act as a whitelist.
 
-Use `sql.begin( async tx => { ... } )` when several statements must succeed together. Inside a transaction, use `tx`, never the root `sql`.
+Use `Model.transaction( async ( ) => { ... } )` when several statements must succeed together (see below).
 
-Write the SQL where it is used. A small module of functions is fine when several `EndPoints` share a query. Do not add a repository layer.
+The data is touched only by its model: every query is a method of the `Model` subclass that owns the table (`notesModel.list( )`, `notesModel.get( id )`), written on `this.db`. A handler, a channel, a worker or the main never write SQL: they import the model and call it, so a query exists once.
+
+```ts
+// models.ts
+export class NotesModel extends Model<SqliteDb> {
+	async get( id: string ): Promise<Note> {
+		const [note] = await this.db`select * from notes where id = ${id}` as Note[];
+		return note ?? null;
+	}
+}
+export const notesModel = new NotesModel( );
+
+// notes.ts (the end points)
+const note = await notesModel.get( ctx.paramValue( "id", "uuid" ) );
+```
+
+Data the application needs at the first start (accounts of a demo, reference rows) is written by a model, in its `onMigrate`: never by the main.
+
+Calls that must succeed together go in `Model.transaction`. The models called inside, and the functions they call, use the transaction through `this.db`: nothing is passed. A transaction opened inside another one is a savepoint of it. Never call `sql.begin`: the models would not see that transaction. Await everything inside the transaction: nothing started in it may outlive it (a promise not awaited, a timer), `this.db` refuses it.
+
+```ts
+await Model.transaction( async ( ) => {
+	const order = await ordersModel.add( customer, lines );
+	await stockModel.reserve( lines );
+	await auditModel.log( "order.created", order.id );
+} );
+```
 
 ---
 
@@ -246,15 +294,15 @@ export class AppConfig extends Config {
 Log events, not sentences:
 
 ```ts
-req.log.info( "note.created", { id } );
+Logger.app.info( "note.created", { id } );
 this.log.warn( "mail.retry", { attempt } );
 ```
 
 - Event names are stable, dotted, lowercase: `resource.what`.
 - Data goes in the object, never in the event name.
-- Inside a request, use `req.log`: the line carries the request id.
+- Use the logger of the application, `Logger.app` (created once by the main with `Logger.create`): never pass a logger around. The line of each request (with its id) is written by z4js.
 - Never log a password, a token, a secret or a full request body.
-- Security events go to the `SecurityLog`, from its closed list. Add an event with `extraEvents` rather than logging security facts in the normal log.
+- Security events go to the `SecurityLog`, from its closed list. Add an event with `extraEvents` rather than logging security facts in the normal log. It is required: the main creates it once (`SecurityLog.create( { file: config.securityLog.file } )`) before `Access` and `Sessions`, and it is read with `SecurityLog.app`.
 - Do not log in the database.
 
 ---
@@ -276,13 +324,13 @@ A `Channel` notes its endpoints, and is mounted in a group like an `EndPoints` o
 Use a worker for CPU-heavy or long work that must not block the requests.
 
 - All worker classes are registered in one entry file (`Worker.register( "stats", Stats )`), which ends with `runWorker( )`.
-- The main starts a worker of a registered class and keeps the object it gets: `const stats = await workers.start( "stats" )`. Talk to that object (`stats.post`, `stats.call`, `stats.on`), given to the `EndPoints` that need it; `workers.get( class, name )` finds it again (`null` if not started). `Workers` itself has no `post` nor `call`.
+- The main creates the only `Workers` of the process and starts the workers of registered classes: `await workers.start( "stats" )`. A handler finds a worker with `Workers.get( class, name )` (`null` if not started: answer 503) and talks to it (`stats.post`, `stats.call`, `stats.on`). Never pass a worker handle down from the main. `Workers` itself has no `post` nor `call`.
 - One worker per thing that must be addressed (an automaton, a device): same class, a name each, its parameters in `data` (`workers.start( "autom", { name: "press", data: { ip } } )`, read with `this.data`). Use `instances` only for interchangeable workers: one is taken in turn, never a chosen one.
 - `onMessage( type, data )` returns the answer of a `call`.
 - A worker that runs until its stop (periodic task, polling) puts its loop in `onRun`, paced by `while( await this.wait( ms ) )`. Never loop in `onStart`: `workers.start` would never return. Pass `this.signal` to anything that can be aborted (`fetch`...).
 - A worker whose `onRun` does heavy or synchronous work and must stay reachable has no `onMessage`: its loop reads the messages itself, `if( msg = this.peekMessage( ) ) { ... } else if( work ) { ... } else { await this.waitMessage( ); }`, under `while( !this.signal.aborted )`. Answer a `call` with `msg.reply( value )` before reading the next message, and end every progress yourself (`done` or `fail`). Never mix the two: `peekMessage`, `waitMessage` and `getMessage` throw in a worker that has an `onMessage`.
 - A worker opens its own database connection (in `onStart`, closed in `onStop`): a connection cannot cross threads.
-- A long task the user waits for reports its progress: the handler creates the task (`tasks.create( req.user )`), posts it to the worker and answers `202 { task }`; the worker calls `this.progress( data.task )`, then `step( text, percent? )` and `done( )` or `fail( text )`. Never send progress through `on` or a channel of your own.
+- A long task the user waits for reports its progress: the handler creates the task (`tasks.create( ctx.session.user )`), posts it to the worker and answers `202 { task }`; the worker calls `this.progress( data.task )`, then `step( text, percent? )` and `done( )` or `fail( text )`. Never send progress through `on` or a channel of your own.
 - Await the work inside `onMessage`: a progress still open when it returns is closed as done.
 - A worker logs with `this.log`; the main thread writes the lines.
 - Use `call` when the request waits for the result, `post` when it does not.
@@ -377,7 +425,7 @@ RouteGroup (guard)
       ↓
 EndPoints handler
       ↓
-access check  →  values read  →  SQL  →  answer
+need  →  filters  →  values read  →  model  →  answer
 ```
 
 These are guidelines, not mandatory layers.

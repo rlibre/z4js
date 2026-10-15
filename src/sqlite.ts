@@ -72,26 +72,32 @@ export interface SqliteOptions {
 	cacheSize?: number;
 	// ms, a transaction still open after that is rolled back; 0 = no limit
 	maxTransactionMs?: number;
+	// the only connection to the file (single instance, z4js keeps state in memory): the
+	// lock of the file is taken at the opening and held until end( ). another process
+	// or thread (SQL editor, a worker) can neither read nor write it meanwhile: a
+	// second instance fails to open. typically !config.debug
+	exclusive?: boolean;
 }
 
 export interface BeginOptions {
 	maxTransactionMs?: number;
 }
 
-interface SqlFunction {
+// what both the connection and a transaction offer: what a model sees (Model<SqliteDb>)
+export interface SqliteDb {
 	<T extends readonly object[] = Row[]>( strings: TemplateStringsArray, ...values: unknown[] ): Query<T>;
 	// identifier: sql( "name" ), or list / insert / update helper: sql( value, ...columns )
 	( value: unknown, ...columns: string[] ): Helper;
 }
 
-export interface SqliteSql extends SqlFunction {
+export interface SqliteSql extends SqliteDb {
 	// options.maxTransactionMs replaces the one of the connection for this transaction only
 	begin<R>( fn: ( tx: SqliteTx ) => R | Promise<R>, options?: BeginOptions ): Promise<R>;
 	// closes the database once the pending queries and transactions are done
 	end( ): Promise<void>;
 }
 
-export interface SqliteTx extends SqlFunction {
+export interface SqliteTx extends SqliteDb {
 	savepoint<R>( fn: ( tx: SqliteTx ) => R | Promise<R> ): Promise<R>;
 }
 
@@ -411,8 +417,23 @@ class Engine {
 
 		checkMaxTransactionMs( this.maxTransactionMs );
 
+		if( options.exclusive && options.readOnly ) {
+			throw new Error( "sqlite: exclusive and readOnly exclude each other" );
+		}
+
 		const { DatabaseSync } = process.getBuiltinModule( "node:sqlite" );
 		this.db = new DatabaseSync( path, { readOnly: options.readOnly ?? false, timeout: options.busyTimeout ?? 0 } );
+
+		// the lock is taken by a write transaction, and kept after it in this mode
+		if( options.exclusive ) {
+			try {
+				this.db.exec( "pragma locking_mode = exclusive; begin exclusive; commit" );
+			}
+			catch( e ) {
+				this.db.close( );
+				throw new Error( `sqlite: ${path} is used by another instance (exclusive)`, { cause: e } );
+			}
+		}
 	}
 
 	run( txn: Txn, strings: TemplateStringsArray, values: readonly unknown[] ): Promise<Result> {

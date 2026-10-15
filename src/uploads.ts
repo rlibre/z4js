@@ -14,11 +14,11 @@
  * that can be found in the LICENSE file or at https://opensource.org/licenses/MIT.
  **/
 
-// Files sent with a request (multipart/form-data), read by EndPoints.filesOf:
+// Files sent with a request (multipart/form-data), read by ctx.filesOf, after the
+// need of the route (checked before reading a byte):
 //
-//   await this.need( req, "notes/create" );                       // before reading a byte
-//   const files = await this.filesOf( req, { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
-//   const comment = this.bodyValue( req, "comment" );              // the text fields: req.body
+//   const files = await ctx.filesOf( { data: { maxBytes: 1_000_000, types: ["text/csv"] } } );
+//   const comment = ctx.bodyValue( "comment" );                    // the text fields: the body
 //   await files.data.keep( join( config.data, "imports", files.data.id ) );
 //
 // Refused by default:

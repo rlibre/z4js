@@ -41,20 +41,33 @@ import { joinPath, PARAM_RE } from "../src/paths";
 
 type Json = Record<string, any>;
 
-// OpenAPI schema of each kind of value read by paramValue, bodyValue and queryValue
-const SCHEMAS: Record<ArgType, Json> = {
+// OpenAPI schema of each single kind of value read by paramValue, bodyValue and queryValue
+const SCALARS = {
 	"string": { type: "string" },
 	"number": { type: "number" },
 	"integer": { type: "integer" },
 	"boolean": { type: "boolean" },
-	"array": { type: "array", items: {} },
 	"object": { type: "object" },
 	"any": {},
 	"uuid": { type: "string", format: "uuid" },
+	"enum": { type: "string" },
 	"date": { type: "string", format: "date-time", description: "or a timestamp in milliseconds" },
 	"sql-date": { type: "string", format: "date" },
 	"sql-datetime": { type: "string", example: "2026-01-31 12:00:00" },
 	"time": { type: "string", example: "12:00:00" },
+} satisfies Record<string, Json>;
+
+const arrayOf = ( items: Json ): Json => ( { type: "array", items } );
+
+// and of the arrays ("integer[]"...)
+const SCHEMAS: Record<ArgType, Json> = {
+	...SCALARS,
+	"string[]": arrayOf( SCALARS.string ),
+	"number[]": arrayOf( SCALARS.number ),
+	"integer[]": arrayOf( SCALARS.integer ),
+	"uuid[]": arrayOf( SCALARS.uuid ),
+	"boolean[]": arrayOf( SCALARS.boolean ),
+	"object[]": arrayOf( SCALARS.object ),
 };
 
 const READERS: Record<string, "path" | "query" | "body"> = {

@@ -27,8 +27,9 @@
 //   to the endpoint and to the user, and destroyed at its first use.
 // - unprotected group: no ticket.
 //
-// The ticket only needs a session: an endpoint that needs a right checks it in its
-// onOpen, with userHasAccess( socket.user, "..." ), and closes the socket otherwise.
+// Each endpoint declares its need, as an HTTP route (required, null for no right). In a
+// guarded group it is checked by the POST that gives the ticket: no right, no ticket,
+// no socket. Rights are checked at the opening only: an open socket keeps its access.
 //
 // There is no Origin check: z4js has no cookie, and a ticket can only be obtained with
 // the Authorization header, which a page of another site cannot send for the user.
@@ -41,9 +42,11 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { RawData, WebSocket } from "ws";
+import { checkNeed } from "./access";
+import type { Need } from "./access";
 import type { RouteGroup } from "./endpoints";
 import { HttpError, statusText } from "./http-error";
-import type { Logger } from "./logger";
+import { Logger } from "./logger";
 import { checkFixedPath, routeKey, RouteList } from "./paths";
 import { isFunction, isString, isUIntNumber } from "./tools";
 
@@ -66,6 +69,8 @@ export interface WSHandler {
 }
 
 export interface WSOptions {
+	// required, as for an HTTP route: checked before the ticket is given (see the header)
+	need: Need;
 	// bytes: a larger message closes the socket (1009)
 	maxPayload?: number;
 }
@@ -73,6 +78,7 @@ export interface WSOptions {
 export interface WSRouteDef {
 	readonly path: string;
 	readonly handler: WSHandler;
+	readonly need: Need;
 	readonly maxPayload: number;
 }
 
@@ -86,10 +92,13 @@ export class Channel {
 	}
 
 	// handler: { onOpen?, onMessage, onClose? }, its methods are called on that object
-	// (an object literal, or the channel itself: this.route( "/notif", this )).
+	// (an object literal, or the channel itself: this.route( "/notif", this, { need } )).
 	// or only the message handler, which then runs with the channel as "this"
-	route( path: string, handler: WSHandler | WSMessageHandler, options: WSOptions = {} ) {
+	route( path: string, handler: WSHandler | WSMessageHandler, options: WSOptions ) {
 		checkFixedPath( path );
+
+		const key = routeKey( "ws", path );
+		checkNeed( key, options );
 
 		const maxPayload = options.maxPayload ?? DEFAULT_MAX_PAYLOAD;
 		if( !isUIntNumber( maxPayload ) || maxPayload === 0 ) {
@@ -101,7 +110,7 @@ export class Channel {
 			throw new Error( `ws: ${path}: onMessage is required` );
 		}
 
-		this.list.add( routeKey( "ws", path ), { path, handler: full, maxPayload } );
+		this.list.add( key, { path, handler: full, need: options.need, maxPayload } );
 	}
 }
 
@@ -206,7 +215,6 @@ export class TicketStore {
 // -- upgrade --------------------------------------------------------------------
 
 export interface UpgradeOptions {
-	logger: Logger;
 	// ms between two pings: a socket that did not answer the previous one is closed
 	pingMs?: number;
 }
@@ -227,7 +235,7 @@ export interface UpgradeHandler {
 
 // handles the WebSocket endpoints of the given groups:
 // server.on( "upgrade", handler.upgrade )
-export function createUpgradeHandler( groups: readonly RouteGroup[], options: UpgradeOptions ): UpgradeHandler {
+export function createUpgradeHandler( groups: readonly RouteGroup[], options: UpgradeOptions = {} ): UpgradeHandler {
 	const endpoints = new Map<string, Endpoint>( );
 
 	for( const group of groups ) {
@@ -283,7 +291,7 @@ export function createUpgradeHandler( groups: readonly RouteGroup[], options: Up
 			user = granted.user;
 		}
 
-		endpoint.server.handleUpgrade( req, socket, head, ws => open( endpoint, ws, user, alive, options.logger ) );
+		endpoint.server.handleUpgrade( req, socket, head, ws => open( endpoint, ws, user, alive ) );
 	};
 
 	return { upgrade, close };
@@ -308,7 +316,8 @@ function startPing( endpoints: Map<string, Endpoint>, alive: WeakSet<WebSocket>,
 	return timer;
 }
 
-function open( endpoint: Endpoint, ws: WebSocket, user: unknown, alive: WeakSet<WebSocket>, logger: Logger ) {
+function open( endpoint: Endpoint, ws: WebSocket, user: unknown, alive: WeakSet<WebSocket> ) {
+	const logger = Logger.app;
 	const socket = new WSocket( ws, endpoint.path, user );
 	const { handler } = endpoint.route;
 

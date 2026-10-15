@@ -19,39 +19,56 @@
 // An EndPoints object only NOTES its routes (method, path, handler, options): it touches
 // neither Express nor the configuration, so it can safely be created at import time.
 // Routes reach Express only through a RouteGroup, mounted by z4js in the main.
+//
+//   this.del( "/item/:id", this.on_delete, { need: "notes/delete", filter: Sessions.stepUp } );
+//
+// The way of a request through a route of a group:
+//
+// 1. the rate limit of all the groups (server.ts), then the guard of a guarded group:
+//    401 without a valid session, which it sets (ctx.session) otherwise.
+// 2. need, with the Access of the group: 403 at the first right refused. Before the
+//    filters, so that no step-up is asked from who has no right. Every route declares
+//    it, null for no right: a forgotten check is refused at the declaration. In an
+//    unprotected group, need is null, even as a function (which needs no Access): need
+//    is about the rights of a user, and there is no user there. A check made without
+//    a session (signature of a webhook...) is a filter. Refused at startup (add).
+// 3. the filters, in order: a refusal throws.
+// 4. the handler, with a context of its own (context.ts). a step that throws ends the
+//    route: the central error handler answers (http-handlers.ts).
+// 5. nothing sent by the handler: the status set by ctx.status, empty body.
 
 import { Router } from "express";
-import type { Request, Response, RequestHandler } from "express";
-import { getParam } from "./params";
-import { receiveFiles } from "./uploads";
-import type { FileSpec, FilesOptions, UploadedFile } from "./uploads";
-import type { ArgType, ArgTypes, ValueType } from "./params";
-import { noAccessCheck } from "./access";
+import type { RequestHandler } from "express";
+import { checkNeed, needStep } from "./access";
+import type { Access, Need } from "./access";
+import { runRoute } from "./context";
+import type { Ctx, Handler } from "./context";
+import { HttpError } from "./http-error";
 import { checkFixedPath, checkPath, joinPath, routeKey, RouteList } from "./paths";
+import { isArray, isString } from "./tools";
 import { Channel, TicketStore } from "./ws";
 import type { WSRouteDef } from "./ws";
 
-export type { Request, Response };
-
 export type Method = "get" | "post" | "put" | "patch" | "delete";
 
-// may be async: Express 5 forwards a rejected promise to the error handler
-export type Handler = ( req: Request, res: Response ) => unknown;
+// may be async: refuses by throwing an HttpError (Sessions.stepUp, RateLimiter.filter...)
+export type Filter = ( ctx: Ctx<any> ) => unknown;
 
 export interface RouteOptions {
-	// Express middleware(s) run before the handler
-	filter?: RequestHandler | RequestHandler[];
+	need: Need;
+	filter?: Filter | readonly Filter[];
 }
 
 export interface RouteDef {
 	readonly method: Method;
 	readonly path: string;
 	readonly handler: Handler;
-	readonly filters: readonly RequestHandler[];
+	readonly need: Need;
+	readonly filters: readonly Filter[];
 }
 
-// base class of the HTTP end points of a domain: notes its routes and reads the
-// values of a request (paramValue, bodyValue, queryValue). mounted by a RouteGroup
+// base class of the HTTP end points of a domain: notes its routes, one method per
+// route, which receives the context of the request (see context.ts). mounted by a RouteGroup
 export class EndPoints {
 	private readonly list = new RouteList<RouteDef>( );
 
@@ -59,45 +76,24 @@ export class EndPoints {
 		return this.list.all;
 	}
 
-	get( url: string, handler: Handler, options?: RouteOptions ) { this.route( "get", url, handler, options ); }
-	post( url: string, handler: Handler, options?: RouteOptions ) { this.route( "post", url, handler, options ); }
-	put( url: string, handler: Handler, options?: RouteOptions ) { this.route( "put", url, handler, options ); }
-	patch( url: string, handler: Handler, options?: RouteOptions ) { this.route( "patch", url, handler, options ); }
-	del( url: string, handler: Handler, options?: RouteOptions ) { this.route( "delete", url, handler, options ); }
+	get( url: string, handler: Handler, options: RouteOptions ) { this.route( "get", url, handler, options ); }
+	post( url: string, handler: Handler, options: RouteOptions ) { this.route( "post", url, handler, options ); }
+	put( url: string, handler: Handler, options: RouteOptions ) { this.route( "put", url, handler, options ); }
+	patch( url: string, handler: Handler, options: RouteOptions ) { this.route( "patch", url, handler, options ); }
+	del( url: string, handler: Handler, options: RouteOptions ) { this.route( "delete", url, handler, options ); }
 
-	protected route( method: Method, url: string, handler: Handler, options: RouteOptions = {} ) {
+	protected route( method: Method, url: string, handler: Handler, options: RouteOptions ) {
 		checkPath( url );
 
-		const filter = options.filter;
-		const filters = filter === undefined ? [] : Array.isArray( filter ) ? filter : [filter];
+		const key = routeKey( method, url );
+		checkNeed( key, options );
+
+		const { need, filter } = options;
+
+		const filters = filter === undefined ? [] : isArray( filter ) ? filter : [filter as Filter];
 
 		// handlers are written as methods and given unbound: they run with the end points object as "this"
-		this.list.add( routeKey( method, url ), { method, path: url, handler: handler.bind( this ) as Handler, filters } );
-	}
-
-	// -- reading values of a request ------------------------------------------
-	// one named value, converted and validated according to its type: a bad or
-	// missing value throws a 400 that names the parameter (never its value)
-
-	// route parameter (/item/:id)
-	paramValue<K extends ArgType = "string">( req: Request, name: string, type?: K, mode?: ValueType ): ArgTypes[K] {
-		return getParam( req.params, name, type ?? "string", mode );
-	}
-
-	// member of the body
-	bodyValue<K extends ArgType = "string">( req: Request, name: string, type?: K, mode?: ValueType ): ArgTypes[K] {
-		return getParam( req.body, name, type ?? "string", mode );
-	}
-
-	// query string (?a=1&b=2)
-	queryValue<K extends ArgType = "string">( req: Request, name: string, type?: K, mode?: ValueType ): ArgTypes[K] {
-		return getParam( req.query, name, type ?? "string", mode );
-	}
-
-	// the files of a multipart body, by field, as declared in spec: anything else is
-	// refused. the text fields become req.body (bodyValue). see uploads.ts
-	filesOf<F extends string>( req: Request, spec: Record<F, FileSpec>, options?: FilesOptions ): Promise<Record<F, UploadedFile>> {
-		return receiveFiles( req, req.res, spec, options );
+		this.list.add( key, { method, path: url, handler: handler.bind( this ) as Handler, need, filters } );
 	}
 }
 
@@ -113,7 +109,7 @@ export interface RouteInfo {
 // whether a guard runs first. The two constructors make the choice explicit: an
 // unprotected group stands out in the main.
 //
-//   RouteGroup.guarded( "/api/v1", sessionGuard )
+//   RouteGroup.guarded( "/api/v1", sessions.guard, access )
 //       .add( "/bed", bedEP )                // -> /api/v1/bed/all, /api/v1/bed/item/:id...
 //       .add( "/live", liveChannel );        // Channel: see ws.ts
 //
@@ -124,19 +120,24 @@ export class RouteGroup {
 	private readonly keys = new Set<string>( );
 	private readonly tickets: TicketStore;
 
-	private constructor( readonly prefix: string, private readonly guard: RequestHandler ) {
+	private constructor( readonly prefix: string, private readonly guard: RequestHandler, private readonly access: Access ) {
 		checkFixedPath( prefix );
 		this.tickets = guard ? new TicketStore( ) : null;
 	}
 
-	// every route of the group runs behind the guard (session check...)
-	static guarded( prefix: string, guard: RequestHandler ): RouteGroup {
-		return new RouteGroup( prefix, guard );
+	// every route of the group runs behind the guard (session check...). access checks
+	// the needs of its routes
+	static guarded( prefix: string, guard: RequestHandler, access: Access ): RouteGroup {
+		if( !guard || !access ) {
+			throw new Error( `guarded group ${prefix}: guard and access expected` );
+		}
+
+		return new RouteGroup( prefix, guard, access );
 	}
 
-	// no control at all: for login, health, signed webhooks...
+	// no control at all: for login, health, signed webhooks... no route may need a right
 	static unprotected( prefix: string ): RouteGroup {
-		return new RouteGroup( prefix, null );
+		return new RouteGroup( prefix, null, null );
 	}
 
 	// mounts the end points or the channel on path, inside the group ("/" for the group
@@ -157,6 +158,7 @@ export class RouteGroup {
 		if( target instanceof Channel ) {
 			for( const route of target.routes ) {
 				reserve( "ws", route.path );
+				this.checkRight( "ws", joinPath( path, route.path ), route.need );
 				if( this.tickets ) {
 					reserve( "post", route.path );
 				}
@@ -165,6 +167,7 @@ export class RouteGroup {
 		else {
 			for( const route of target.routes ) {
 				reserve( route.method, route.path );
+				this.checkRight( route.method, joinPath( path, route.path ), route.need );
 			}
 		}
 
@@ -196,23 +199,34 @@ export class RouteGroup {
 		}
 
 		for( const { path, route } of this.mounted( EndPoints ) ) {
-			router.route( path )[route.method]( ...route.filters, route.handler as RequestHandler );
+			const steps = this.steps( route.need, route.filters, route.handler );
+			router.route( path )[route.method]( ( req, res ) => runRoute( req, res, steps ) );
 		}
 
-		// the guard has set req.user: the ticket carries it to the socket
+		// the guard has set the session: the ticket carries its user to the socket. the
+		// need of the endpoint is checked here: no right, no ticket, no socket
 		if( this.tickets ) {
-			for( const { path } of this.mounted( Channel ) ) {
+			for( const { path, route } of this.mounted( Channel ) ) {
 				const endpoint = joinPath( this.prefix, path );
-				router.post( path, ( req, res ) => {
-					// a session is enough for a ticket: an endpoint that needs a right checks
-					// it in its onOpen ( userHasAccess( socket.user, ... ) )
-					noAccessCheck( req.user );
-					res.json( { ticket: this.tickets.issue( endpoint, req.user ) } );
-				} );
+				const issue = ( ctx: Ctx<{ ticket: string }> ) => ctx.json( { ticket: this.tickets.issue( endpoint, ctx.session.user ) } );
+				const steps = this.steps( route.need, [], issue );
+				router.post( path, ( req, res ) => runRoute( req, res, steps ) );
 			}
 		}
 
 		return router;
+	}
+
+	// guard (run by the router), need, filters, handler: no step-up asked from who has no right
+	private steps( need: Need, filters: readonly Filter[], handler: Handler ): Handler[] {
+		return [...( need ? [needStep( need, this.access )] : [] ), ...filters, handler];
+	}
+
+	// a right in an unprotected group: refused at startup (there is no user there)
+	private checkRight( method: string, path: string, need: Need ) {
+		if( need && !this.access ) {
+			throw new Error( `route ${routeKey( method, path )} needs a right: group ${this.prefix} is unprotected (need: null; a check without session is a filter)` );
+		}
 	}
 
 	// the WebSocket endpoints, full paths, for createUpgradeHandler (ws.ts)

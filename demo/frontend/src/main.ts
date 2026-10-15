@@ -169,7 +169,7 @@ class NotesView extends VBox<NotesViewProps, NotesViewEvents> {
 		early.forEach( e => this.onTask( e ) );
 	}
 
-	// our recount moves its box; the end of another task (the backup of the server,
+	// our recount moves its box; the end of another task (a broadcast task,
 	// a recount started elsewhere) is a notification
 	private onTask( e: TaskEvent ) {
 		if( this.early ) {

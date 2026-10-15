@@ -156,7 +156,7 @@ export class Config {
 		file: this.file( "securityLog.file", { def: null, mustExist: false } ),
 	};
 
-	// files received with the requests (EndPoints.filesOf), until kept or deleted.
+	// files received with the requests (ctx.filesOf), until kept or deleted.
 	// null = a folder of the system temporary folder
 	readonly uploads = {
 		folder: this.folder( "uploads.folder", { def: null, create: true } ),

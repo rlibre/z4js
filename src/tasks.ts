@@ -19,9 +19,9 @@
 // The main thread creates the task: the handler gets its id at once and answers with
 // it, so the client can match the messages it receives. The worker reports on it:
 //
-//   handler   const task = tasks.create( req.user );                // or { broadcast: true }
+//   handler   const task = tasks.create( ctx.session.user );        // or { broadcast: true }
 //             importer.post( "run", { task, file } );              // the object of the worker (workers.start)
-//             res.status( 202 ).json( { task } );
+//             ctx.status( 202 ).json( { task } );
 //
 //   worker    const progress = this.progress( data.task );          // "start"
 //             progress.step( "line 300 / 1200", 25 );               // text, optional percent
@@ -36,7 +36,7 @@
 // - the messages of a task go to the sockets of the user who created it only, unless
 //   the task is created with broadcast (then every connected user of the group)
 // - a worker reports only on a task created by the main thread. The one exception is a
-//   broadcast task (a scheduled backup: nobody asked for it): the worker creates it
+//   broadcast task (a scheduled job: nobody asked for it): the worker creates it
 // - a socket without user (unprotected group) is closed: tasks need a session
 //
 // A client that connects while a task runs receives its current state (start, then
@@ -105,7 +105,8 @@ export class Tasks extends Channel {
 			onClose: socket => {
 				this.sockets.delete( socket );
 			},
-		} );
+		// any logged user follows the tasks he may see (his own, the broadcast ones)
+		}, { need: null } );
 	}
 
 	// a new task for the user (the one of the request), or for everybody with broadcast.

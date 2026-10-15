@@ -26,11 +26,34 @@
 // surface (Db). The SQL written by the models is theirs; only the tools below
 // depend on the database.
 //
+// A model is also the only way to its data: the queries of the application are
+// methods of its models, on this.db, never written anywhere else. Anyone who needs
+// the data imports the model:
+//
+//   export const notesModel = new NotesModel( );          // exported by its module
+//   const note = await notesModel.get( id );              // anywhere else
+//
+// Transactions: this.db is the transaction in progress, if any, else the connection
+// given to updateAll. Model.transaction opens one around a function: every query made
+// from it, at any depth (models, functions they call), belongs to it, without passing
+// anything. Opened inside another one, it is a savepoint of it.
+//
+//   await Model.transaction( async ( ) => {
+//       await ordersModel.add( order );
+//       await stockModel.reserve( order.lines );
+//   } );
+//
+// The migration transaction is the one in progress during onMigrate. A begin made
+// elsewhere would not be seen by the models: there is none (SQL lives in the models).
+// Nothing started in a transaction may outlive it (promise not awaited, timer): it
+// would still see it, ended. this.db refuses it with a clear error.
+//
 // Versions: z4js keeps the version of each model in the table __versions. onMigrate
 // receives the stored one (0 the first time) and returns the new one. It is called
 // at every start: the version says what was done by the code, but the base may have
 // been changed by hand (dev): checking the real state (hasTable...) stays the rule.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isSqlite, TX_TIMEOUT_CODE } from "./sqlite";
 import type { SqliteSql } from "./sqlite";
 import { errorCode, isIntNumber, isUIntNumber } from "./tools";
@@ -74,9 +97,45 @@ export interface Db {
 	<T extends readonly object[] = Record<string, any>[]>( strings: TemplateStringsArray, ...values: any[] ): PromiseLike<T>;
 }
 
+// a transaction in progress (postgres.js TransactionSql, z4js SqliteTx)
+export interface DbTx extends Db {
+	savepoint<R>( fn: ( db: DbTx ) => Promise<R> ): Promise<unknown>;
+}
+
 // connection given to updateAll / checkAll: they open the migration transaction
 export interface DbRoot extends Db {
-	begin<R>( fn: ( db: Db ) => Promise<R> ): Promise<unknown>;
+	begin<R>( fn: ( db: DbTx ) => Promise<R> ): Promise<unknown>;
+}
+
+// the transaction in progress (Model.transaction, migration): this.db of the models.
+// ended: its function is over. a work started inside and still running after (promise
+// not awaited, timer) still sees it: it is refused with a clear message
+interface Running {
+	db: DbTx;
+	ended: boolean;
+}
+
+const transactions = new AsyncLocalStorage<Running>( );
+
+// runs fn with tx as the transaction in progress
+async function within<R>( tx: DbTx, fn: ( ) => Promise<R> ): Promise<R> {
+	const running: Running = { db: tx, ended: false };
+	try {
+		return await transactions.run( running, fn );
+	}
+	finally {
+		running.ended = true;
+	}
+}
+
+// the transaction in progress, null outside of any
+function inProgress( ): DbTx {
+	const running = transactions.getStore( );
+	if( running?.ended ) {
+		throw new Error( "transaction already ended: a work started in a transaction must not outlive it (promise not awaited, timer)" );
+	}
+
+	return running?.db ?? null;
 }
 
 // a model failed to migrate: names it, the original error is the cause
@@ -101,6 +160,39 @@ export interface MigrateOptions {
 	// - SQLite: replaces the maxTransactionMs of the connection (30s by default)
 	// - Postgres: transaction_timeout (Postgres 17 or later, an older server refuses it)
 	maxTransactionMs?: number;
+}
+
+// z4js keeps state in memory (sessions, rate limits, tickets, tasks, mutexes): an
+// application runs as a single instance. Postgres: an advisory lock taken at startup
+// (updateAll), held by a connection kept open for the life of the process; Postgres
+// releases it when that connection ends, even on a crash. The second key is the
+// current schema: two applications in two schemas of one database do not block each
+// other. The loss of that connection (restart of the server...) loses the lock without
+// notice: an application that cares watches it with the onclose option of postgres.js
+const INSTANCE_LOCK = 0x7a346a73;	// "z4js"
+
+// a connection reserved by postgres.js (sql.reserve( ), 3.4 or later)
+interface ReservedDb extends Db {
+	release( ): void;
+}
+
+async function lockInstance( sql: DbRoot ) {
+	if( isSqlite( sql ) ) {
+		return;
+	}
+
+	const reserve = ( sql as { reserve?: ( ) => Promise<ReservedDb> } ).reserve;
+	if( typeof reserve !== "function" ) {
+		throw new Error( "single instance: the connection cannot reserve one (postgres.js 3.4 or later expected)" );
+	}
+
+	// kept for the life of the process: the lock lives as long as it
+	const db = await reserve.call( sql );
+	const [row] = await db`select pg_try_advisory_lock( ${INSTANCE_LOCK}, hashtext( current_schema( ) ) ) as locked, current_schema( ) as schema`;
+	if( !row.locked ) {
+		db.release( );
+		throw new Error( `another instance of the application uses this database (schema ${row.schema}): z4js runs as a single instance` );
+	}
 }
 
 // thrown to cancel the transaction of a dry run, never propagated
@@ -223,8 +315,9 @@ function locate( db: Db, table: string ) {
 // -- model --------------------------------------------------------------------
 
 // base class of the models: a model owns one table (or a few), migrates it at
-// startup and validates it. every model is migrated in one transaction
-export class Model {
+// startup, validates it, and holds the queries on its data. every model is migrated
+// in one transaction. D: what this.db is typed as (SqliteDb...)
+export class Model<D extends Db = Db> {
 	// unique name of the model (registry key, error messages): not necessarily a table name
 	readonly modelName: string;
 
@@ -235,8 +328,10 @@ export class Model {
 	// models register themselves in a static registry when they are
 	// created, because they are instantiated and exported at import time (same
 	// style as the end points). Model names are unique: a second one throws.
-	private static readonly registry = new Map<string, Model>( );
+	private static readonly registry = new Map<string, Model<any>>( );
 	private static updated = false;
+	// the connection given to updateAll: the data of every model
+	private static connection: DbRoot = null;
 
 	constructor( modelName: string, priority = DEFAULT_PRIORITY ) {
 		if( Model.registry.has( modelName ) ) {
@@ -253,23 +348,59 @@ export class Model {
 		Model.registry.set( modelName, this );
 	}
 
-	// the registered model of that name, created by create( ) if there is none yet.
-	// used by the z4js parts that need a model (Access, Sessions): the application may
-	// still create it itself before, with its own priority
-	static ensure( modelName: string, create: ( ) => Model ): Model {
-		return Model.registry.get( modelName ) ?? create( );
+	// the registered model of that name, created if there is none yet. used by the
+	// z4js parts that read a model (Access, Sessions): the application may still create
+	// it itself before, with its own priority or as a subclass (more columns)
+	static ensure<M extends Model<any>>( modelName: string, cls: new ( ) => M ): M {
+		const model = Model.registry.get( modelName ) ?? new cls( );
+		if( !( model instanceof cls ) ) {
+			throw new Error( `model "${modelName}" must be a ${cls.name}` );
+		}
+
+		return model;
 	}
 
 	// -- migration ------------------------------------------------------------
 
-	// migrates every model, in one transaction (once per process)
+	// migrates every model, in one transaction (once per process), after taking the
+	// lock of the single instance (Postgres, see lockInstance)
 	static async updateAll( sql: DbRoot, options: MigrateOptions = {} ): Promise<void> {
 		if( Model.updated ) {
 			throw new Error( "the database has already been updated by this process" );
 		}
 
 		Model.updated = true;
+		await lockInstance( sql );
 		await Model.run( sql, false, options );
+		Model.connection = sql;
+	}
+
+	// runs fn in a transaction: committed when fn resolves, rolled back when it throws.
+	// inside another one: a savepoint of it
+	static async transaction<R>( fn: ( ) => Promise<R> ): Promise<R> {
+		const current = inProgress( );
+		const run = ( tx: DbTx ) => within( tx, fn );
+
+		if( current ) {
+			return await current.savepoint( run ) as R;
+		}
+
+		if( !Model.connection ) {
+			throw new Error( "Model.transaction before Model.updateAll" );
+		}
+
+		return await Model.connection.begin( run ) as R;
+	}
+
+	// for the queries of the model: the transaction in progress, else the connection.
+	// set once every model is migrated: a query before is a programming error
+	protected get db( ): D {
+		const db = inProgress( ) ?? Model.connection;
+		if( !db ) {
+			throw new Error( `model "${this.modelName}": no database before Model.updateAll` );
+		}
+
+		return db as unknown as D;
 	}
 
 	// plays every migration on the real database, then cancels everything:
@@ -311,7 +442,7 @@ export class Model {
 			throw new Error( "maxTransactionMs must be an integer >= 0" );
 		}
 
-		const migrate = async ( db: Db ) => {
+		const migrate = ( db: DbTx ) => within( db, async ( ) => {
 			if( options.lockTimeout ) {
 				await dialectOf( db ).setLockTimeout( db, options.lockTimeout );
 			}
@@ -353,7 +484,7 @@ export class Model {
 			if( dryRun ) {
 				throw new Rollback( );
 			}
-		};
+		} );
 
 		try {
 			// SQLite: the limit is given when the transaction is opened
